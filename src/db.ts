@@ -8,6 +8,7 @@ export function getDb(): Database.Database {
     const dbPath = process.env.DELEGATION_DB_PATH ?? path.resolve("delegation.db");
     _db = new Database(dbPath);
     _db.pragma("journal_mode = WAL");
+    _db.pragma("busy_timeout = 5000");
     _db.pragma("foreign_keys = ON");
     initSchema(_db);
   }

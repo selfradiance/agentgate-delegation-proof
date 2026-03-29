@@ -372,8 +372,12 @@ export function revokeDelegation(delegationId: string): DelegationRow | null {
   const delegation = getDelegation(delegationId);
   if (!delegation) return null;
 
-  // Guard: cannot revoke terminal states
-  if (delegation.status === "completed" || delegation.status === "failed") {
+  // Guard: cannot revoke terminal or transient states
+  if (
+    delegation.status === "completed" ||
+    delegation.status === "failed" ||
+    delegation.status === "accepting"
+  ) {
     return null;
   }
 
@@ -463,8 +467,12 @@ export function checkExpiry(delegationId: string): DelegationRow | null {
   const now = new Date().toISOString();
   if (now < delegation.expires_at) return null; // not expired yet
 
-  // Only expire non-terminal delegations
-  if (delegation.status === "completed" || delegation.status === "failed") {
+  // Only expire non-terminal, non-transient delegations
+  if (
+    delegation.status === "completed" ||
+    delegation.status === "failed" ||
+    delegation.status === "accepting"
+  ) {
     return null;
   }
 

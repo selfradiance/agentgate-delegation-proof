@@ -56,7 +56,7 @@ npx tsx src/cli.ts act \
   --exposure 83 \
   --payload '{"instruction": "make it formal"}'
 
-# Resolver: resolve an action
+# Resolver: resolve an action (success, failed, or malicious)
 npx tsx src/cli.ts resolve --action <id> --outcome success
 
 # Human: revoke or close
@@ -93,7 +93,7 @@ Terminal reasons: `exhausted`, `closed`, `revoked`, `expired`
 ## Testing
 
 ```bash
-# Unit tests (75 tests, no external dependencies)
+# Unit tests (no external dependencies)
 npm test
 
 # Integration tests (requires AgentGate running)

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import "dotenv/config";
+import { createHash } from "crypto";
 
 import {
   loadOrCreateKeypair,
@@ -74,6 +75,11 @@ async function cmdDelegate(): Promise<void> {
   const ttl = getNumArg("ttl", true);
   const description = getArg("description", true);
   const identityFile = getArg("identity-file");
+
+  if (ttl > 86400) {
+    console.error("TTL cannot exceed 86400 seconds (AgentGate bond TTL cap).");
+    process.exit(1);
+  }
 
   const keys = loadOrCreateKeypair(identityFile);
   const identityId = await createIdentity(keys, identityFile);
@@ -200,10 +206,20 @@ async function cmdAct(): Promise<void> {
   // Phase 2: execute in AgentGate
   let agentgateActionId: string;
   try {
-    const payload = JSON.parse(payloadStr);
-    // Embed delegation metadata in action payload (convention)
+    let payload: Record<string, unknown>;
+    try {
+      payload = JSON.parse(payloadStr);
+    } catch {
+      console.error(`Invalid JSON in --payload: ${payloadStr}`);
+      process.exit(1);
+    }
+    // Embed delegation metadata in action payload (convention per spec)
     payload.delegation_id = delegationId;
     payload.delegator_id = delegation.delegator_id;
+    payload.scope_hash = createHash("sha256")
+      .update(delegation.scope_json)
+      .digest("hex")
+      .slice(0, 16);
 
     const result = await executeBondedAction(
       keys,
@@ -218,10 +234,21 @@ async function cmdAct(): Promise<void> {
     // Phase 3: revert on failure
     revertAction(actionId);
 
-    // Check for rate limiting
+    // Check for rate limiting — action not counted against delegation limits
     if (err instanceof Error && err.message.includes("(429)")) {
+      const { getDb } = await import("./db");
+      const db = getDb();
+      const { randomUUID } = await import("crypto");
+      db.prepare(
+        `INSERT INTO delegation_events (id, delegation_id, event_type, detail_json, created_at)
+         VALUES (?, ?, 'action_rejected_rate_limited', ?, ?)`
+      ).run(
+        randomUUID(),
+        delegationId,
+        JSON.stringify({ action_type: actionType, declared_exposure_cents: exposure }),
+        new Date().toISOString()
+      );
       console.error("Rate limited by AgentGate. Action not counted against delegation limits.");
-      // Log the rate limit event
       process.exit(1);
     }
 
@@ -241,11 +268,11 @@ async function cmdAct(): Promise<void> {
 
 async function cmdResolve(): Promise<void> {
   const actionId = getArg("action", true);
-  const outcome = getArg("outcome", true) as "success" | "failed";
+  const outcome = getArg("outcome", true);
   const identityFile = getArg("identity-file");
 
-  if (outcome !== "success" && outcome !== "failed") {
-    console.error('Outcome must be "success" or "failed"');
+  if (outcome !== "success" && outcome !== "failed" && outcome !== "malicious") {
+    console.error('Outcome must be "success", "failed", or "malicious"');
     process.exit(1);
   }
 
@@ -266,10 +293,13 @@ async function cmdResolve(): Promise<void> {
   }
 
   // Resolve in AgentGate
-  await resolveAgentGateAction(keys, resolverId, action.agentgate_action_id, outcome);
+  await resolveAgentGateAction(
+    keys,
+    resolverId,
+    action.agentgate_action_id,
+    outcome as "success" | "failed" | "malicious"
+  );
 
-  // Resolve locally (maps outcome — AgentGate uses "success"/"failed",
-  // local supports "success"/"failed"/"malicious")
   const localOutcome = outcome as "success" | "failed" | "malicious";
   const resolved = resolveLocalAction(actionId, localOutcome);
 
@@ -414,7 +444,7 @@ Usage:
   npx tsx src/cli.ts delegate  --to <agent-pub-key> --actions <types> --max-actions <n> --max-exposure <cents> --max-total-exposure <cents> --bond <cents> --ttl <seconds> --description <text>
   npx tsx src/cli.ts accept    --delegation <id> --bond <cents> [--identity-file <path>]
   npx tsx src/cli.ts act       --delegation <id> --action-type <type> --exposure <cents> [--payload <json>] [--identity-file <path>]
-  npx tsx src/cli.ts resolve   --action <id> --outcome <success|failed> [--identity-file <path>]
+  npx tsx src/cli.ts resolve   --action <id> --outcome <success|failed|malicious> [--identity-file <path>]
   npx tsx src/cli.ts revoke    --delegation <id>
   npx tsx src/cli.ts close     --delegation <id>
   npx tsx src/cli.ts status    --delegation <id>

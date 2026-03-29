@@ -1,7 +1,6 @@
 // AgentGate REST API client with Ed25519 signed requests.
-// Copied from agent-003-email-rewriter with modifications for delegation project:
-//   - Identity file path configurable per role (human vs agent)
-//   - Bond status query added for integration tests
+// Adapted from agent-003-email-rewriter with identity file path
+// configurable per role (human vs agent vs resolver).
 
 import {
   createHash,
