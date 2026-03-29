@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.env
+*_PROJECT_CONTEXT.md
+agent-identity*.json
+*.log
+.DS_Store

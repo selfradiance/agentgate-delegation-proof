@@ -1,0 +1,24 @@
+{
+  "name": "delegation-identity-proof",
+  "version": "0.1.0",
+  "description": "Delegated authority with economic accountability — a proof-of-concept built on AgentGate",
+  "type": "commonjs",
+  "scripts": {
+    "start": "tsx src/cli.ts",
+    "build": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.0.0",
+    "dotenv": "^17.3.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/node": "^25.5.0",
+    "vitest": "^4.1.0"
+  },
+  "license": "MIT"
+}
