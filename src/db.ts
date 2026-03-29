@@ -1,0 +1,67 @@
+import Database from "better-sqlite3";
+import path from "path";
+
+const DB_PATH = process.env.DELEGATION_DB_PATH ?? path.resolve("delegation.db");
+
+let _db: Database.Database | null = null;
+
+export function getDb(): Database.Database {
+  if (!_db) {
+    _db = new Database(DB_PATH);
+    _db.pragma("journal_mode = WAL");
+    _db.pragma("foreign_keys = ON");
+    initSchema(_db);
+  }
+  return _db;
+}
+
+export function closeDb(): void {
+  if (_db) {
+    _db.close();
+    _db = null;
+  }
+}
+
+function initSchema(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS delegations (
+      id                        TEXT PRIMARY KEY,
+      delegator_id              TEXT NOT NULL,
+      delegate_id               TEXT NOT NULL,
+      scope_json                TEXT NOT NULL,
+      delegator_bond_id         TEXT NOT NULL,
+      delegate_bond_id          TEXT,
+      delegator_bond_outcome    TEXT,
+      delegator_bond_resolved_at TEXT,
+      delegation_outcome        TEXT,
+      status                    TEXT NOT NULL DEFAULT 'pending',
+      terminal_reason           TEXT,
+      created_at                TEXT NOT NULL,
+      accepted_at               TEXT,
+      expires_at                TEXT NOT NULL,
+      completed_at              TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS delegation_actions (
+      id                        TEXT PRIMARY KEY,
+      delegation_id             TEXT NOT NULL,
+      agentgate_action_id       TEXT,
+      action_type               TEXT NOT NULL,
+      declared_exposure_cents    INTEGER NOT NULL,
+      effective_exposure_cents   INTEGER NOT NULL,
+      outcome                   TEXT,
+      created_at                TEXT NOT NULL,
+      resolved_at               TEXT,
+      FOREIGN KEY (delegation_id) REFERENCES delegations(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS delegation_events (
+      id                        TEXT PRIMARY KEY,
+      delegation_id             TEXT NOT NULL,
+      event_type                TEXT NOT NULL,
+      detail_json               TEXT,
+      created_at                TEXT NOT NULL,
+      FOREIGN KEY (delegation_id) REFERENCES delegations(id)
+    );
+  `);
+}
