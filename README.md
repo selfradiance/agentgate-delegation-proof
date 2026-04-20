@@ -2,9 +2,36 @@
 
 A proof-of-concept for bounded human-to-agent delegation with economic accountability. A human delegates scoped authority to an agent, both parties post bonds, and actions are settled through AgentGate.
 
+v0.2.0 adds a narrow server-mediated scope-enforcement path for delegated actions. The local delegation system only recognizes, accounts for, and bounds delegated actions that pass through this repo's checkpoint. Direct AgentGate calls outside that checkpoint are outside delegation accounting. AgentGate itself remains semantically unchanged.
+
 ## Why This Exists
 
 Current agent identity systems answer "who is this agent?" but not "who authorized it, to do what, within what limits, and with what accountability?" Delegation Identity Proof fills that gap. The human has skin in the game too — not just the agent.
+
+## What v0.2 Proves
+
+- Delegated actions are only recognized, accounted for, and bounded when they pass through the local checkpoint in this repo.
+- The checkpoint enforces delegation existence, delegate binding, request freshness, allowed action type, per-action exposure, total exposure, and max-actions limits before forwarding anything to AgentGate.
+- Direct AgentGate calls outside the checkpoint are outside the delegation system's accounting and are not treated as delegated in-scope actions.
+- AgentGate remains unchanged. The delegation checkpoint is a sidecar layer in this repo, not a change to AgentGate core semantics.
+
+## Server-Mediated Scope Enforcement
+
+```text
+delegate request
+  -> checkpoint in this repo
+     -> validate + authenticate
+     -> enforce delegated scope + local accounting
+     -> reserve locally
+     -> forward to AgentGate execute
+     -> attach returned agentgate_action_id
+     -> later resolve through AgentGate
+     -> finalize locally
+
+direct AgentGate call
+  -> AgentGate only
+  -> outside delegation accounting in this repo
+```
 
 ## How It Relates to AgentGate
 
@@ -12,13 +39,20 @@ Current agent identity systems answer "who is this agent?" but not "who authoriz
 
 AgentGate must be running for this project to work.
 
-## How It Works
+## Proof Path
 
-1. **Human creates delegation** — defines scope (allowed actions, exposure limits, time bounds), locks a commitment bond on AgentGate
-2. **Agent accepts** — posts its own bond (two-phase: claim → bond → finalize)
-3. **Agent acts within scope** — scope validated locally with AgentGate-aligned 1.2× capacity math
-4. **Resolver resolves** — each action settled via AgentGate
-5. **Delegation completes** — aggregate outcome computed, bonds released or slashed
+1. `POST /v1/delegations/:id/execute`
+   Validates and authenticates the delegated request, enforces local delegated scope, creates a local reservation, starts the forward attempt, performs the real AgentGate execute call, attaches the returned `agentgate_action_id`, and returns either a `forwarded` result or a narrow pre-attachment failure.
+2. `POST /v1/delegations/:id/actions/:reservationId/finalize`
+   Accepts only `success` or `failed`, requires a forwarded and attached checkpoint reservation, resolves through AgentGate, lands in the local finalize seam, and returns either a `finalized` result or a narrow resolution failure.
+
+## What You Should See
+
+- An in-scope delegated action reaches `stage: "forwarded"` and carries both a local `reservationId` and an attached `agentgateActionId`.
+- The explicit finalize step reaches `stage: "finalized"` with `outcome: "success"` or `outcome: "failed"`.
+- A disallowed action type is rejected before any AgentGate execute call.
+- An exposure-limit violation is rejected before any AgentGate execute call.
+- A pre-attachment AgentGate execute failure returns a machine-readable failure and lands in the local pre-attachment failure seam.
 
 ## What's Implemented
 
@@ -32,8 +66,10 @@ AgentGate must be running for this project to work.
 - Bond TTL alignment (human bond = delegation TTL + 1hr margin)
 - Auto-complete on scope exhaustion
 - Crash recovery for orphaned action reservations
-- v0.2 Baby Step 20: the checkpoint `POST /v1/delegations/:id/execute` path now completes the real narrow proof handoff end to end for delegated execution: local reserve, forward-start, real AgentGate execute, and local action-id attachment, with external pre-attachment failures landing in the existing failure seam
-- v0.2 Baby Step 21: the checkpoint `POST /v1/delegations/:id/actions/:reservationId/finalize` path now explicitly resolves forwarded checkpoint-managed actions through AgentGate and lands them in the existing local finalize seam
+- Checkpoint execute endpoint: `POST /v1/delegations/:id/execute`
+- Checkpoint finalize endpoint: `POST /v1/delegations/:id/actions/:reservationId/finalize`
+- Real AgentGate execute handoff plus explicit AgentGate resolution bridge for checkpoint-managed actions
+- Narrow local seams for reservation, forward start, attachment, pre-attachment failure, and finalization
 
 ## Quick Start
 
@@ -59,14 +95,14 @@ npx tsx src/cli.ts act --delegation-id <id> --action "file-transform" --exposure
 npx tsx src/cli.ts status --delegation-id <id>
 ```
 
-## Scope / Non-Goals (v0.1)
+## Non-Goals / Limits
 
-- Human bond is a commitment deposit, not slashable (v0.2)
-- Scope enforcement is client-side only — a malicious agent with direct API access can bypass (v0.2)
-- Payload convention in AgentGate is unenforceable (opaque)
-- Bond TTL ceiling of 24 hours
-- No protection against human grief-revoke attacks (v0.2)
-- Single-hop delegation only — no recursive chain-of-custody (v0.2)
+- The checkpoint does not globally block all direct AgentGate calls. Calls made outside it are simply outside delegation accounting in this repo.
+- AgentGate does not understand delegation scope. It still sees normal execute and resolve calls.
+- No retries, queues, background workers, or broader orchestration.
+- No recursive chain-of-custody.
+- No transparency log, generalized authorization framework, or UI.
+- Human bond remains a commitment deposit rather than a slashable delegation stake.
 
 ## Tests
 
@@ -83,9 +119,9 @@ npm test
 
 ## Status
 
-v0.1.0 shipped and credible. v0.2 Baby Step 21 now gives the checkpoint proof path an explicit finalize entrypoint alongside the real execute handoff, while still staying narrow: no retries, async orchestration, queues, or workflow engine. 183 tests.
+v0.1.0 shipped and credible. v0.2.0 now proves a narrow server-mediated delegated execution path with explicit execute and finalize checkpoint entrypoints. 183 tests.
 
-Planned next work: [v0.2 server-mediated scope enforcement](docs/v0.2-server-mediated-scope-enforcement.md).
+Design note: [v0.2 server-mediated scope enforcement](docs/v0.2-server-mediated-scope-enforcement.md).
 
 ## License
 
