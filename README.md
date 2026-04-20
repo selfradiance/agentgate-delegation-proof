@@ -32,6 +32,7 @@ AgentGate must be running for this project to work.
 - Bond TTL alignment (human bond = delegation TTL + 1hr margin)
 - Auto-complete on scope exhaustion
 - Crash recovery for orphaned action reservations
+- v0.2 Baby Step 1: checkpoint endpoint skeleton at `POST /v1/delegations/:id/execute` with strict request-shape validation and a stub `stage: "validated"` response
 
 ## Quick Start
 
@@ -68,7 +69,7 @@ npx tsx src/cli.ts status --delegation-id <id>
 
 ## Tests
 
-88 tests across 7 files. 3 integration tests (opt-in via `RUN_INTEGRATION_TESTS=1`, requires live AgentGate).
+95 tests across 8 files. 3 integration tests (opt-in via `RUN_INTEGRATION_TESTS=1`, requires live AgentGate).
 
 ```bash
 npm test
@@ -81,7 +82,7 @@ npm test
 
 ## Status
 
-Complete — v0.1.0 shipped. Triple-audited (Claude Code 8-round + Codex cold-eyes + Claude Code cross-verification). 88 tests.
+v0.1.0 shipped and credible. v0.2 Baby Step 1 added a narrow checkpoint endpoint skeleton with schema-layer validation only. 95 tests.
 
 Planned next work: [v0.2 server-mediated scope enforcement](docs/v0.2-server-mediated-scope-enforcement.md).
 
