@@ -36,6 +36,8 @@ export type CheckpointForwardFinalOutcome = "success" | "failed";
 export const CHECKPOINT_FORWARD_STATE_PENDING = "pending_forward" as const;
 export const CHECKPOINT_FORWARD_STATE_IN_FORWARD = "in_forward" as const;
 export const CHECKPOINT_FORWARD_STATE_FORWARDED = "forwarded" as const;
+export const CHECKPOINT_FORWARD_FAILURE_REASON_PRE_ATTACHMENT =
+  "pre_attachment_forward_failed" as const;
 export type CheckpointForwardState =
   | typeof CHECKPOINT_FORWARD_STATE_PENDING
   | typeof CHECKPOINT_FORWARD_STATE_IN_FORWARD
@@ -341,6 +343,29 @@ export class CheckpointForwardFinalizationError extends Error {
   }
 }
 
+export class CheckpointForwardFailureError extends Error {
+  code:
+    | "RESERVATION_NOT_FOUND"
+    | "RESERVATION_NOT_IN_FORWARD"
+    | "AGENTGATE_ACTION_ALREADY_ATTACHED"
+    | "RESERVATION_ALREADY_FINALIZED"
+    | "FORWARD_FAILURE_FAILED";
+
+  constructor(
+    code:
+      | "RESERVATION_NOT_FOUND"
+      | "RESERVATION_NOT_IN_FORWARD"
+      | "AGENTGATE_ACTION_ALREADY_ATTACHED"
+      | "RESERVATION_ALREADY_FINALIZED"
+      | "FORWARD_FAILURE_FAILED",
+    message: string
+  ) {
+    super(message);
+    this.name = "CheckpointForwardFailureError";
+    this.code = code;
+  }
+}
+
 export function reserveCheckpointAction(
   params: CheckpointReservationParams
 ): CheckpointReservationResult {
@@ -624,6 +649,86 @@ export function attachCheckpointForwardedAction(
     throw new CheckpointForwardAttachmentError(
       "FORWARD_ATTACHMENT_FAILED",
       "Failed to attach AgentGate action id to checkpoint reservation"
+    );
+  }
+}
+
+export function failCheckpointForwardAttempt(
+  reservationId: string
+): DelegationActionRow {
+  const db = getDb();
+  const failForwardAttempt = db.transaction((txReservationId: string) => {
+    const action = db
+      .prepare("SELECT * FROM delegation_actions WHERE id = ?")
+      .get(txReservationId) as DelegationActionRow | undefined;
+
+    if (!action) {
+      throw new CheckpointForwardFailureError(
+        "RESERVATION_NOT_FOUND",
+        "Checkpoint reservation not found"
+      );
+    }
+
+    if (action.outcome !== null || action.resolved_at !== null) {
+      throw new CheckpointForwardFailureError(
+        "RESERVATION_ALREADY_FINALIZED",
+        "Checkpoint reservation is already finalized"
+      );
+    }
+
+    if (action.agentgate_action_id !== null) {
+      throw new CheckpointForwardFailureError(
+        "AGENTGATE_ACTION_ALREADY_ATTACHED",
+        "Checkpoint reservation already has an attached AgentGate action id"
+      );
+    }
+
+    if (action.forward_state !== CHECKPOINT_FORWARD_STATE_IN_FORWARD) {
+      throw new CheckpointForwardFailureError(
+        "RESERVATION_NOT_IN_FORWARD",
+        "Checkpoint reservation is not currently in_forward"
+      );
+    }
+
+    const now = new Date().toISOString();
+    const result = db.prepare(
+      `UPDATE delegation_actions
+       SET outcome = ?, resolved_at = ?
+       WHERE id = ? AND forward_state = ? AND agentgate_action_id IS NULL AND outcome IS NULL AND resolved_at IS NULL`
+    ).run(
+      "failed",
+      now,
+      txReservationId,
+      CHECKPOINT_FORWARD_STATE_IN_FORWARD
+    );
+
+    if (result.changes !== 1) {
+      throw new CheckpointForwardFailureError(
+        "FORWARD_FAILURE_FAILED",
+        "Failed to record pre-attachment checkpoint forward failure"
+      );
+    }
+
+    logEvent(action.delegation_id, "checkpoint_forward_failed", {
+      reservation_id: txReservationId,
+      failure_reason: CHECKPOINT_FORWARD_FAILURE_REASON_PRE_ATTACHMENT,
+    });
+
+    return db
+      .prepare("SELECT * FROM delegation_actions WHERE id = ?")
+      .get(txReservationId) as DelegationActionRow;
+  });
+
+  try {
+    return failForwardAttempt.immediate(reservationId);
+  } catch (error) {
+    if (error instanceof CheckpointForwardFailureError) {
+      throw error;
+    }
+
+    throw new CheckpointForwardFailureError(
+      "FORWARD_FAILURE_FAILED",
+      "Failed to record pre-attachment checkpoint forward failure"
     );
   }
 }
