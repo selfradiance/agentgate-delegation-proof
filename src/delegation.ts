@@ -307,6 +307,14 @@ export interface CheckpointAgentGateExecuteRequest {
   exposure_cents: number;
 }
 
+export interface CheckpointAgentGateExecuteRequestBody {
+  identityId: string;
+  bondId: string;
+  actionType: string;
+  payload: unknown;
+  exposure_cents: number;
+}
+
 export class CheckpointReservationError extends Error {
   code:
     | "DELEGATION_NOT_FOUND"
@@ -464,6 +472,31 @@ export class CheckpointExecuteIdentityResolutionError extends Error {
   ) {
     super(message);
     this.name = "CheckpointExecuteIdentityResolutionError";
+    this.code = code;
+  }
+}
+
+export class CheckpointExecuteRequestFinalizationError extends Error {
+  code:
+    | "MISSING_IDENTITY_ID"
+    | "MISSING_IDENTITY_REF"
+    | "MISSING_BOND_ID"
+    | "INVALID_ACTION_TYPE"
+    | "INVALID_EXPOSURE"
+    | "FINALIZE_REQUEST_FAILED";
+
+  constructor(
+    code:
+      | "MISSING_IDENTITY_ID"
+      | "MISSING_IDENTITY_REF"
+      | "MISSING_BOND_ID"
+      | "INVALID_ACTION_TYPE"
+      | "INVALID_EXPOSURE"
+      | "FINALIZE_REQUEST_FAILED",
+    message: string
+  ) {
+    super(message);
+    this.name = "CheckpointExecuteRequestFinalizationError";
     this.code = code;
   }
 }
@@ -920,6 +953,64 @@ export function resolveCheckpointAgentGateIdentityId(
     throw new CheckpointExecuteIdentityResolutionError(
       "IDENTITY_RESOLUTION_FAILED",
       "Checkpoint execute identity boundary could not be resolved"
+    );
+  }
+}
+
+export function finalizeCheckpointAgentGateExecuteRequest(
+  builtRequest: CheckpointAgentGateExecuteRequest,
+  identityId: string
+): CheckpointAgentGateExecuteRequestBody {
+  if (identityId.trim().length === 0) {
+    throw new CheckpointExecuteRequestFinalizationError(
+      "MISSING_IDENTITY_ID",
+      "Resolved AgentGate identityId is missing"
+    );
+  }
+
+  if (builtRequest.identityRef.trim().length === 0) {
+    throw new CheckpointExecuteRequestFinalizationError(
+      "MISSING_IDENTITY_REF",
+      "Built checkpoint execute request is missing identity reference"
+    );
+  }
+
+  if (builtRequest.bondId.trim().length === 0) {
+    throw new CheckpointExecuteRequestFinalizationError(
+      "MISSING_BOND_ID",
+      "Built checkpoint execute request is missing bond id"
+    );
+  }
+
+  if (builtRequest.actionType.trim().length === 0) {
+    throw new CheckpointExecuteRequestFinalizationError(
+      "INVALID_ACTION_TYPE",
+      "Built checkpoint execute request is missing action type"
+    );
+  }
+
+  if (
+    !Number.isInteger(builtRequest.exposure_cents) ||
+    builtRequest.exposure_cents <= 0
+  ) {
+    throw new CheckpointExecuteRequestFinalizationError(
+      "INVALID_EXPOSURE",
+      "Built checkpoint execute request has an invalid exposure"
+    );
+  }
+
+  try {
+    return {
+      identityId,
+      bondId: builtRequest.bondId,
+      actionType: builtRequest.actionType,
+      payload: builtRequest.payload,
+      exposure_cents: builtRequest.exposure_cents,
+    };
+  } catch {
+    throw new CheckpointExecuteRequestFinalizationError(
+      "FINALIZE_REQUEST_FAILED",
+      "Built checkpoint execute request could not be finalized into an AgentGate execute body"
     );
   }
 }

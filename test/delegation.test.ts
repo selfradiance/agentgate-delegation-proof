@@ -24,6 +24,7 @@ import {
   finalizeAction,
   revertAction,
   failCheckpointForwardAttempt,
+  finalizeCheckpointAgentGateExecuteRequest,
   finalizeCheckpointForwardedAction,
   getCheckpointReservationExecutionStatus,
   isCheckpointReservationExecuteEligible,
@@ -1360,6 +1361,90 @@ describe("checkpoint AgentGate identity resolution", () => {
       expect.objectContaining({
         name: "CheckpointExecuteIdentityResolutionError",
         code: "IDENTITY_FILE_NOT_FOUND",
+      })
+    );
+  });
+});
+
+describe("checkpoint AgentGate execute request finalization", () => {
+  it("combines the built request and resolved identity id into the final execute body", () => {
+    expect(
+      finalizeCheckpointAgentGateExecuteRequest(
+        {
+          identityRef: "delegate-pub-key",
+          bondId: "bond-123",
+          actionType: "email-rewrite",
+          payload: { input: "rewrite this draft" },
+          exposure_cents: 50,
+        },
+        "agentgate-identity-123"
+      )
+    ).toEqual({
+      identityId: "agentgate-identity-123",
+      bondId: "bond-123",
+      actionType: "email-rewrite",
+      payload: { input: "rewrite this draft" },
+      exposure_cents: 50,
+    });
+  });
+
+  it("preserves actionType, payload, exposure_cents, and bondId correctly", () => {
+    const body = finalizeCheckpointAgentGateExecuteRequest(
+      {
+        identityRef: "delegate-pub-key",
+        bondId: "bond-789",
+        actionType: "file-transform",
+        payload: { file: "draft.txt", transform: "rewrite" },
+        exposure_cents: 83,
+      },
+      "agentgate-identity-789"
+    );
+
+    expect(body.bondId).toBe("bond-789");
+    expect(body.actionType).toBe("file-transform");
+    expect(body.payload).toEqual({
+      file: "draft.txt",
+      transform: "rewrite",
+    });
+    expect(body.exposure_cents).toBe(83);
+  });
+
+  it("rejects a missing resolved identity id clearly", () => {
+    expect(() =>
+      finalizeCheckpointAgentGateExecuteRequest(
+        {
+          identityRef: "delegate-pub-key",
+          bondId: "bond-123",
+          actionType: "email-rewrite",
+          payload: { input: "rewrite this draft" },
+          exposure_cents: 50,
+        },
+        ""
+      )
+    ).toThrowError(
+      expect.objectContaining({
+        name: "CheckpointExecuteRequestFinalizationError",
+        code: "MISSING_IDENTITY_ID",
+      })
+    );
+  });
+
+  it("rejects an invalid built request clearly", () => {
+    expect(() =>
+      finalizeCheckpointAgentGateExecuteRequest(
+        {
+          identityRef: "delegate-pub-key",
+          bondId: "",
+          actionType: "email-rewrite",
+          payload: { input: "rewrite this draft" },
+          exposure_cents: 50,
+        },
+        "agentgate-identity-123"
+      )
+    ).toThrowError(
+      expect.objectContaining({
+        name: "CheckpointExecuteRequestFinalizationError",
+        code: "MISSING_BOND_ID",
       })
     );
   });
