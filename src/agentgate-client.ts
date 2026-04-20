@@ -79,6 +79,11 @@ export interface AgentKeys {
   privateKey: string;
 }
 
+export interface SavedIdentityMetadata {
+  publicKey: string;
+  identityId?: string;
+}
+
 interface SavedIdentity {
   publicKey: string;
   privateKey: string;
@@ -130,6 +135,21 @@ export function getSavedIdentityId(identityFile?: string): string | undefined {
     fs.readFileSync(filePath, "utf8")
   );
   return data.identityId;
+}
+
+export function getSavedIdentityMetadata(
+  identityFile?: string
+): SavedIdentityMetadata | undefined {
+  const filePath = getIdentityFilePath(identityFile);
+  if (!fs.existsSync(filePath)) return undefined;
+  const data: SavedIdentity = JSON.parse(
+    fs.readFileSync(filePath, "utf8")
+  );
+
+  return {
+    publicKey: data.publicKey,
+    identityId: data.identityId,
+  };
 }
 
 function saveIdentityId(identityId: string, identityFile?: string): void {

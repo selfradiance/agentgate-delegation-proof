@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import fs from "fs";
 import { closeDb, getDb } from "../src/db";
 import {
   attachCheckpointForwardedAction,
@@ -34,6 +35,7 @@ import {
   computeOutcome,
   getCheckpointReservationForwardStatus,
   recoverTransientStates,
+  resolveCheckpointAgentGateIdentityId,
   getActions,
   getEvents,
   startCheckpointForwardAttempt,
@@ -48,6 +50,7 @@ const TEST_SCOPE: DelegationScope = {
   max_total_exposure_cents: 300,
   description: "Test delegation scope",
 };
+const TEST_CHECKPOINT_IDENTITY_FILE = "test-checkpoint-execute-identity.json";
 
 function makeTestDelegation(overrides?: Partial<{
   ttlSeconds: number;
@@ -69,6 +72,9 @@ beforeEach(() => {
 afterEach(() => {
   closeDb();
   delete process.env.DELEGATION_DB_PATH;
+  if (fs.existsSync(TEST_CHECKPOINT_IDENTITY_FILE)) {
+    fs.unlinkSync(TEST_CHECKPOINT_IDENTITY_FILE);
+  }
 });
 
 describe("createDelegation", () => {
@@ -1321,6 +1327,39 @@ describe("checkpoint AgentGate execute request builder", () => {
       expect.objectContaining({
         name: "CheckpointExecuteRequestBuildError",
         code: "MISSING_BOND_ID",
+      })
+    );
+  });
+});
+
+describe("checkpoint AgentGate identity resolution", () => {
+  it("resolves the final AgentGate identity id from a matching saved identity file", () => {
+    fs.writeFileSync(
+      TEST_CHECKPOINT_IDENTITY_FILE,
+      JSON.stringify({
+        publicKey: "delegate-pub-key",
+        identityId: "agentgate-identity-123",
+      })
+    );
+
+    expect(
+      resolveCheckpointAgentGateIdentityId(
+        "delegate-pub-key",
+        TEST_CHECKPOINT_IDENTITY_FILE
+      )
+    ).toBe("agentgate-identity-123");
+  });
+
+  it("fails clearly when the checkpoint identity boundary cannot be resolved", () => {
+    expect(() =>
+      resolveCheckpointAgentGateIdentityId(
+        "delegate-pub-key",
+        TEST_CHECKPOINT_IDENTITY_FILE
+      )
+    ).toThrowError(
+      expect.objectContaining({
+        name: "CheckpointExecuteIdentityResolutionError",
+        code: "IDENTITY_FILE_NOT_FOUND",
       })
     );
   });

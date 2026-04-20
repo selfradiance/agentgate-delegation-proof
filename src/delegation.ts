@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto";
+import { getSavedIdentityMetadata } from "./agentgate-client";
 import { getDb } from "./db";
 import {
   DelegationScopeSchema,
@@ -444,6 +445,29 @@ export class CheckpointExecuteRequestBuildError extends Error {
   }
 }
 
+export class CheckpointExecuteIdentityResolutionError extends Error {
+  code:
+    | "MISSING_IDENTITY_REF"
+    | "IDENTITY_FILE_NOT_FOUND"
+    | "IDENTITY_REF_MISMATCH"
+    | "IDENTITY_ID_NOT_FOUND"
+    | "IDENTITY_RESOLUTION_FAILED";
+
+  constructor(
+    code:
+      | "MISSING_IDENTITY_REF"
+      | "IDENTITY_FILE_NOT_FOUND"
+      | "IDENTITY_REF_MISMATCH"
+      | "IDENTITY_ID_NOT_FOUND"
+      | "IDENTITY_RESOLUTION_FAILED",
+    message: string
+  ) {
+    super(message);
+    this.name = "CheckpointExecuteIdentityResolutionError";
+    this.code = code;
+  }
+}
+
 export class CheckpointForwardFailureError extends Error {
   code:
     | "RESERVATION_NOT_FOUND"
@@ -845,6 +869,57 @@ export function buildCheckpointAgentGateExecuteRequest(
     throw new CheckpointExecuteRequestBuildError(
       "BUILD_REQUEST_FAILED",
       "Prepared execute input could not be converted into an AgentGate execute request"
+    );
+  }
+}
+
+export function resolveCheckpointAgentGateIdentityId(
+  identityRef: string,
+  identityFile?: string
+): string {
+  if (identityRef.trim().length === 0) {
+    throw new CheckpointExecuteIdentityResolutionError(
+      "MISSING_IDENTITY_REF",
+      "Checkpoint execute identity reference is missing"
+    );
+  }
+
+  try {
+    const savedIdentity = getSavedIdentityMetadata(identityFile);
+
+    if (!savedIdentity) {
+      throw new CheckpointExecuteIdentityResolutionError(
+        "IDENTITY_FILE_NOT_FOUND",
+        "No local AgentGate identity file was found for checkpoint execute identity resolution"
+      );
+    }
+
+    if (savedIdentity.publicKey !== identityRef) {
+      throw new CheckpointExecuteIdentityResolutionError(
+        "IDENTITY_REF_MISMATCH",
+        "Local AgentGate identity file does not match the checkpoint identity reference"
+      );
+    }
+
+    if (
+      typeof savedIdentity.identityId !== "string" ||
+      savedIdentity.identityId.trim().length === 0
+    ) {
+      throw new CheckpointExecuteIdentityResolutionError(
+        "IDENTITY_ID_NOT_FOUND",
+        "Local AgentGate identity file does not contain a saved identityId"
+      );
+    }
+
+    return savedIdentity.identityId;
+  } catch (error) {
+    if (error instanceof CheckpointExecuteIdentityResolutionError) {
+      throw error;
+    }
+
+    throw new CheckpointExecuteIdentityResolutionError(
+      "IDENTITY_RESOLUTION_FAILED",
+      "Checkpoint execute identity boundary could not be resolved"
     );
   }
 }
