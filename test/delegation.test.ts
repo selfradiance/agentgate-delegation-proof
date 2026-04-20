@@ -26,6 +26,7 @@ import {
   failCheckpointForwardAttempt,
   finalizeCheckpointAgentGateExecuteRequest,
   finalizeCheckpointForwardedAction,
+  getCheckpointExecuteReadiness,
   getCheckpointReservationExecutionStatus,
   isCheckpointReservationExecuteEligible,
   prepareCheckpointExecuteInput,
@@ -1570,6 +1571,103 @@ describe("checkpoint AgentGate execute body composition", () => {
 
     expect(() =>
       prepareFinalCheckpointAgentGateExecuteBody(
+        reservationId,
+        TEST_CHECKPOINT_IDENTITY_FILE
+      )
+    ).toThrowError(
+      expect.objectContaining({
+        name: "CheckpointExecuteIdentityResolutionError",
+        code: "IDENTITY_FILE_NOT_FOUND",
+      })
+    );
+  });
+});
+
+describe("checkpoint execute readiness", () => {
+  function acceptDelegation(id: string): void {
+    claimForAccept(id, "agent-pub-key");
+    finalizeAccept(id, "agent-bond-456");
+  }
+
+  function createExecuteEligibleReservation(
+    delegationId: string,
+    payload: unknown = { input: "rewrite this draft" }
+  ): string {
+    const reservation = reserveCheckpointAction({
+      delegationId,
+      actorPublicKey: "agent-pub-key",
+      actionType: "email-rewrite",
+      payload,
+      declaredExposureCents: 50,
+    });
+
+    startCheckpointForwardAttempt(reservation.reservationId);
+    return reservation.reservationId;
+  }
+
+  it("returns ready true with the expected final execute body for an eligible reservation", () => {
+    const d = makeTestDelegation();
+    acceptDelegation(d.id);
+    const reservationId = createExecuteEligibleReservation(d.id, {
+      file: "draft.txt",
+      transform: "rewrite",
+    });
+
+    fs.writeFileSync(
+      TEST_CHECKPOINT_IDENTITY_FILE,
+      JSON.stringify({
+        publicKey: "agent-pub-key",
+        identityId: "agentgate-identity-123",
+      })
+    );
+
+    expect(
+      getCheckpointExecuteReadiness(
+        reservationId,
+        TEST_CHECKPOINT_IDENTITY_FILE
+      )
+    ).toEqual({
+      ready: true,
+      reservationId,
+      code: "READY",
+      executeBody: {
+        identityId: "agentgate-identity-123",
+        bondId: "agent-bond-456",
+        actionType: "email-rewrite",
+        payload: {
+          file: "draft.txt",
+          transform: "rewrite",
+        },
+        exposure_cents: 50,
+      },
+    });
+  });
+
+  it("returns ready false with the expected not-ready code for an ineligible reservation", () => {
+    const d = makeTestDelegation();
+    acceptDelegation(d.id);
+    const reservationId = reserveCheckpointAction({
+      delegationId: d.id,
+      actorPublicKey: "agent-pub-key",
+      actionType: "email-rewrite",
+      payload: { input: "draft" },
+      declaredExposureCents: 50,
+    }).reservationId;
+
+    expect(getCheckpointExecuteReadiness(reservationId)).toEqual({
+      ready: false,
+      reservationId,
+      code: "NOT_IN_FORWARD",
+    });
+  });
+
+  it("fails in the expected narrow way when the local identity cannot be resolved", () => {
+    const d = makeTestDelegation();
+    acceptDelegation(d.id);
+    const reservationId = createExecuteEligibleReservation(d.id);
+
+    expect(() =>
+      getCheckpointExecuteReadiness(
         reservationId,
         TEST_CHECKPOINT_IDENTITY_FILE
       )

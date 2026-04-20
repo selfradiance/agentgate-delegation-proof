@@ -286,6 +286,17 @@ export interface CheckpointReservationExecuteEligibility {
   code: CheckpointReservationExecuteEligibilityCode;
 }
 
+export type CheckpointExecuteReadinessCode =
+  | "READY"
+  | Exclude<CheckpointReservationExecuteEligibilityCode, "ELIGIBLE">;
+
+export interface CheckpointExecuteReadiness {
+  ready: boolean;
+  reservationId: string;
+  code: CheckpointExecuteReadinessCode;
+  executeBody?: CheckpointAgentGateExecuteRequestBody;
+}
+
 export interface CheckpointPreparedExecuteInput {
   reservationId: string;
   delegationId: string;
@@ -1027,6 +1038,31 @@ export function prepareFinalCheckpointAgentGateExecuteBody(
   );
 
   return finalizeCheckpointAgentGateExecuteRequest(builtRequest, identityId);
+}
+
+export function getCheckpointExecuteReadiness(
+  reservationId: string,
+  identityFile?: string
+): CheckpointExecuteReadiness {
+  const eligibility = isCheckpointReservationExecuteEligible(reservationId);
+
+  if (!eligibility.eligible) {
+    return {
+      ready: false,
+      reservationId: eligibility.reservationId,
+      code: eligibility.code,
+    };
+  }
+
+  return {
+    ready: true,
+    reservationId: eligibility.reservationId,
+    code: "READY",
+    executeBody: prepareFinalCheckpointAgentGateExecuteBody(
+      reservationId,
+      identityFile
+    ),
+  };
 }
 
 export function startCheckpointForwardAttempt(
