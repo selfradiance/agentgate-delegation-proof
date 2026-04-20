@@ -21,6 +21,7 @@ import {
   revertAction,
   failCheckpointForwardAttempt,
   finalizeCheckpointForwardedAction,
+  getCheckpointReservationExecutionStatus,
   resolveAction,
   revokeDelegation,
   closeDelegation,
@@ -900,6 +901,139 @@ describe("checkpoint forward failure", () => {
       () => failCheckpointForwardAttempt(reservationId),
       "RESERVATION_ALREADY_FINALIZED"
     );
+  });
+});
+
+describe("checkpoint reservation execution status", () => {
+  function acceptDelegation(id: string): void {
+    claimForAccept(id, "agent-pub-key");
+    finalizeAccept(id, "agent-bond-456");
+  }
+
+  function createPendingReservation(delegationId: string): string {
+    return reserveCheckpointAction({
+      delegationId,
+      actorPublicKey: "agent-pub-key",
+      actionType: "email-rewrite",
+      declaredExposureCents: 50,
+    }).reservationId;
+  }
+
+  it("reports pending_forward", () => {
+    const d = makeTestDelegation();
+    acceptDelegation(d.id);
+    const reservationId = createPendingReservation(d.id);
+
+    expect(getCheckpointReservationExecutionStatus(reservationId)).toEqual({
+      status: "pending_forward",
+      reservationId,
+      forwardState: CHECKPOINT_FORWARD_STATE_PENDING,
+      outcome: null,
+      agentgateActionId: null,
+      resolvedAt: null,
+    });
+  });
+
+  it("reports in_forward", () => {
+    const d = makeTestDelegation();
+    acceptDelegation(d.id);
+    const reservationId = createPendingReservation(d.id);
+
+    startCheckpointForwardAttempt(reservationId);
+
+    expect(getCheckpointReservationExecutionStatus(reservationId)).toEqual({
+      status: "in_forward",
+      reservationId,
+      forwardState: CHECKPOINT_FORWARD_STATE_IN_FORWARD,
+      outcome: null,
+      agentgateActionId: null,
+      resolvedAt: null,
+    });
+  });
+
+  it("reports forwarded", () => {
+    const d = makeTestDelegation();
+    acceptDelegation(d.id);
+    const reservationId = createPendingReservation(d.id);
+
+    startCheckpointForwardAttempt(reservationId);
+    attachCheckpointForwardedAction(reservationId, "ag-checkpoint-001");
+
+    expect(getCheckpointReservationExecutionStatus(reservationId)).toEqual({
+      status: "forwarded",
+      reservationId,
+      forwardState: CHECKPOINT_FORWARD_STATE_FORWARDED,
+      outcome: null,
+      agentgateActionId: "ag-checkpoint-001",
+      resolvedAt: null,
+    });
+  });
+
+  it("reports finalized_success", () => {
+    const d = makeTestDelegation();
+    acceptDelegation(d.id);
+    const reservationId = createPendingReservation(d.id);
+
+    startCheckpointForwardAttempt(reservationId);
+    attachCheckpointForwardedAction(reservationId, "ag-checkpoint-001");
+    finalizeCheckpointForwardedAction(reservationId, "success");
+
+    expect(getCheckpointReservationExecutionStatus(reservationId)).toEqual({
+      status: "finalized_success",
+      reservationId,
+      forwardState: CHECKPOINT_FORWARD_STATE_FORWARDED,
+      outcome: "success",
+      agentgateActionId: "ag-checkpoint-001",
+      resolvedAt: expect.any(String),
+    });
+  });
+
+  it("reports finalized_failed", () => {
+    const d = makeTestDelegation();
+    acceptDelegation(d.id);
+    const reservationId = createPendingReservation(d.id);
+
+    startCheckpointForwardAttempt(reservationId);
+    attachCheckpointForwardedAction(reservationId, "ag-checkpoint-001");
+    finalizeCheckpointForwardedAction(reservationId, "failed");
+
+    expect(getCheckpointReservationExecutionStatus(reservationId)).toEqual({
+      status: "finalized_failed",
+      reservationId,
+      forwardState: CHECKPOINT_FORWARD_STATE_FORWARDED,
+      outcome: "failed",
+      agentgateActionId: "ag-checkpoint-001",
+      resolvedAt: expect.any(String),
+    });
+  });
+
+  it("reports pre_attachment_failed", () => {
+    const d = makeTestDelegation();
+    acceptDelegation(d.id);
+    const reservationId = createPendingReservation(d.id);
+
+    startCheckpointForwardAttempt(reservationId);
+    failCheckpointForwardAttempt(reservationId);
+
+    expect(getCheckpointReservationExecutionStatus(reservationId)).toEqual({
+      status: "pre_attachment_failed",
+      reservationId,
+      forwardState: CHECKPOINT_FORWARD_STATE_IN_FORWARD,
+      outcome: "failed",
+      agentgateActionId: null,
+      resolvedAt: expect.any(String),
+    });
+  });
+
+  it("reports not_found for an unknown reservation", () => {
+    expect(getCheckpointReservationExecutionStatus("missing")).toEqual({
+      status: "not_found",
+      reservationId: "missing",
+      forwardState: null,
+      outcome: null,
+      agentgateActionId: null,
+      resolvedAt: null,
+    });
   });
 });
 

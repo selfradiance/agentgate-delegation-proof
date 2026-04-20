@@ -251,6 +251,24 @@ export interface CheckpointForwardStatus {
   eligible: boolean;
 }
 
+export type CheckpointReservationExecutionState =
+  | "pending_forward"
+  | "in_forward"
+  | "forwarded"
+  | "finalized_success"
+  | "finalized_failed"
+  | "pre_attachment_failed"
+  | "not_found";
+
+export interface CheckpointReservationExecutionStatus {
+  status: CheckpointReservationExecutionState;
+  reservationId: string;
+  forwardState: CheckpointForwardState | null;
+  outcome: string | null;
+  agentgateActionId: string | null;
+  resolvedAt: string | null;
+}
+
 export class CheckpointReservationError extends Error {
   code:
     | "DELEGATION_NOT_FOUND"
@@ -503,6 +521,55 @@ export function getCheckpointReservationForwardStatus(
       action.forward_state === CHECKPOINT_FORWARD_STATE_PENDING &&
       action.agentgate_action_id === null &&
       action.outcome === null,
+  };
+}
+
+export function getCheckpointReservationExecutionStatus(
+  reservationId: string
+): CheckpointReservationExecutionStatus {
+  const db = getDb();
+  const action = db
+    .prepare("SELECT * FROM delegation_actions WHERE id = ?")
+    .get(reservationId) as DelegationActionRow | undefined;
+
+  if (!action) {
+    return {
+      status: "not_found",
+      reservationId,
+      forwardState: null,
+      outcome: null,
+      agentgateActionId: null,
+      resolvedAt: null,
+    };
+  }
+
+  let status: CheckpointReservationExecutionState;
+
+  if (action.outcome === "success") {
+    status = "finalized_success";
+  } else if (
+    action.outcome === "failed" &&
+    action.forward_state === CHECKPOINT_FORWARD_STATE_IN_FORWARD &&
+    action.agentgate_action_id === null
+  ) {
+    status = "pre_attachment_failed";
+  } else if (action.outcome === "failed") {
+    status = "finalized_failed";
+  } else if (action.forward_state === CHECKPOINT_FORWARD_STATE_PENDING) {
+    status = "pending_forward";
+  } else if (action.forward_state === CHECKPOINT_FORWARD_STATE_IN_FORWARD) {
+    status = "in_forward";
+  } else {
+    status = "forwarded";
+  }
+
+  return {
+    status,
+    reservationId: action.id,
+    forwardState: action.forward_state,
+    outcome: action.outcome,
+    agentgateActionId: action.agentgate_action_id,
+    resolvedAt: action.resolved_at,
   };
 }
 
