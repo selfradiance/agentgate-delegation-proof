@@ -46,6 +46,7 @@ function initSchema(db: Database.Database): void {
       id                        TEXT PRIMARY KEY,
       delegation_id             TEXT NOT NULL,
       agentgate_action_id       TEXT,
+      forward_state             TEXT,
       action_type               TEXT NOT NULL,
       declared_exposure_cents    INTEGER NOT NULL,
       effective_exposure_cents   INTEGER NOT NULL,
@@ -64,4 +65,25 @@ function initSchema(db: Database.Database): void {
       FOREIGN KEY (delegation_id) REFERENCES delegations(id)
     );
   `);
+
+  ensureColumn(db, "delegation_actions", "forward_state", "TEXT");
+}
+
+function ensureColumn(
+  db: Database.Database,
+  tableName: string,
+  columnName: string,
+  columnDefinition: string
+): void {
+  const columns = db
+    .prepare(`PRAGMA table_info(${tableName})`)
+    .all() as { name: string }[];
+
+  if (columns.some((column) => column.name === columnName)) {
+    return;
+  }
+
+  db.exec(
+    `ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDefinition}`
+  );
 }

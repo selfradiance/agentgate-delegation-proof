@@ -41,6 +41,7 @@ interface CheckpointErrorResponse {
 interface CheckpointSuccessResponse {
   ok: true;
   stage: "reserved";
+  forwardState: "pending_forward";
   delegationId: string;
   actionType: string;
   reservationId: string;
@@ -258,6 +259,7 @@ export async function handleCheckpointRequest(
     sendJson(res, 200, {
       ok: true,
       stage: "reserved",
+      forwardState: reservation.forwardState,
       delegationId: reservation.delegation.id,
       actionType: requestResult.data.actionType,
       reservationId: reservation.reservationId,

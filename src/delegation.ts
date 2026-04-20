@@ -32,6 +32,8 @@ export type DelegationOutcome =
   | "none";
 
 export type ActionOutcome = "success" | "failed" | "malicious";
+export const CHECKPOINT_FORWARD_STATE_PENDING = "pending_forward" as const;
+export type CheckpointForwardState = typeof CHECKPOINT_FORWARD_STATE_PENDING;
 
 export interface DelegationRow {
   id: string;
@@ -55,6 +57,7 @@ export interface DelegationActionRow {
   id: string;
   delegation_id: string;
   agentgate_action_id: string | null;
+  forward_state: CheckpointForwardState | null;
   action_type: string;
   declared_exposure_cents: number;
   effective_exposure_cents: number;
@@ -232,6 +235,12 @@ export interface CheckpointReservationParams {
 export interface CheckpointReservationResult {
   reservationId: string;
   delegation: DelegationRow;
+  forwardState: CheckpointForwardState;
+}
+
+export interface CheckpointForwardStatus {
+  action: DelegationActionRow;
+  eligible: boolean;
 }
 
 export class CheckpointReservationError extends Error {
@@ -340,11 +349,12 @@ export function reserveCheckpointAction(
 
     db.prepare(
       `INSERT INTO delegation_actions
-       (id, delegation_id, action_type, declared_exposure_cents, effective_exposure_cents, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
+       (id, delegation_id, forward_state, action_type, declared_exposure_cents, effective_exposure_cents, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
     ).run(
       reservationId,
       txParams.delegationId,
+      CHECKPOINT_FORWARD_STATE_PENDING,
       txParams.actionType,
       txParams.declaredExposureCents,
       effective,
@@ -353,13 +363,18 @@ export function reserveCheckpointAction(
 
     logEvent(txParams.delegationId, "checkpoint_action_reserved", {
       reservation_id: reservationId,
+      forward_state: CHECKPOINT_FORWARD_STATE_PENDING,
       delegate_id: txParams.actorPublicKey,
       action_type: txParams.actionType,
       declared_exposure_cents: txParams.declaredExposureCents,
       effective_exposure_cents: effective,
     });
 
-    return { reservationId, delegation };
+    return {
+      reservationId,
+      delegation,
+      forwardState: CHECKPOINT_FORWARD_STATE_PENDING,
+    };
   });
 
   try {
@@ -374,6 +389,25 @@ export function reserveCheckpointAction(
       "Failed to create local checkpoint reservation"
     );
   }
+}
+
+export function getCheckpointReservationForwardStatus(
+  reservationId: string
+): CheckpointForwardStatus | null {
+  const db = getDb();
+  const action = db
+    .prepare("SELECT * FROM delegation_actions WHERE id = ?")
+    .get(reservationId) as DelegationActionRow | undefined;
+
+  if (!action) return null;
+
+  return {
+    action,
+    eligible:
+      action.forward_state === CHECKPOINT_FORWARD_STATE_PENDING &&
+      action.agentgate_action_id === null &&
+      action.outcome === null,
+  };
 }
 
 /**

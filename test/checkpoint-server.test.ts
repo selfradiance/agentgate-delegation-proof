@@ -5,10 +5,12 @@ import { generateKeyPairSync } from "node:crypto";
 import { createCheckpointServer } from "../src/checkpoint-server";
 import { closeDb, getDb } from "../src/db";
 import {
+  CHECKPOINT_FORWARD_STATE_PENDING,
   claimForAccept,
   createDelegation,
   finalizeAccept,
   getActions,
+  getCheckpointReservationForwardStatus,
   getEvents,
   type DelegationRow,
 } from "../src/delegation";
@@ -190,6 +192,7 @@ describe("checkpoint server — execute endpoint", () => {
     expect(body).toEqual({
       ok: true,
       stage: "reserved",
+      forwardState: "pending_forward",
       delegationId: delegation.id,
       actionType: "email-rewrite",
       reservationId: expect.any(String),
@@ -199,6 +202,7 @@ describe("checkpoint server — execute endpoint", () => {
     expect(actions).toHaveLength(1);
     expect(actions[0].id).toBe(body.reservationId);
     expect(actions[0].delegation_id).toBe(delegation.id);
+    expect(actions[0].forward_state).toBe(CHECKPOINT_FORWARD_STATE_PENDING);
     expect(actions[0].action_type).toBe("email-rewrite");
     expect(actions[0].declared_exposure_cents).toBe(83);
     expect(actions[0].effective_exposure_cents).toBe(100);
@@ -244,11 +248,59 @@ describe("checkpoint server — execute endpoint", () => {
     expect(reserveEvents).toHaveLength(1);
     expect(JSON.parse(reserveEvents[0].detail_json ?? "{}")).toMatchObject({
       reservation_id: body.reservationId,
+      forward_state: CHECKPOINT_FORWARD_STATE_PENDING,
       delegate_id: delegateKeys.publicKey,
       action_type: "file-transform",
       declared_exposure_cents: 10,
       effective_exposure_cents: 12,
     });
+  });
+
+  it("response clearly indicates the reservation is pending forward execution", async () => {
+    const delegateKeys = generateTestKeys();
+    const delegation = createAcceptedDelegation(delegateKeys);
+    const { baseUrl } = await startServer();
+
+    const response = await fetch(
+      `${baseUrl}/v1/delegations/${delegation.id}/execute`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(buildSignedRequest(delegation.id, delegateKeys)),
+      }
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      stage: "reserved",
+      forwardState: "pending_forward",
+    });
+  });
+
+  it("reservation forward-status helper reports future forward eligibility", async () => {
+    const delegateKeys = generateTestKeys();
+    const delegation = createAcceptedDelegation(delegateKeys);
+    const { baseUrl } = await startServer();
+
+    const response = await fetch(
+      `${baseUrl}/v1/delegations/${delegation.id}/execute`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(buildSignedRequest(delegation.id, delegateKeys)),
+      }
+    );
+
+    const body = await response.json();
+    const status = getCheckpointReservationForwardStatus(body.reservationId);
+
+    expect(status).not.toBeNull();
+    expect(status!.eligible).toBe(true);
+    expect(status!.action.id).toBe(body.reservationId);
+    expect(status!.action.forward_state).toBe(CHECKPOINT_FORWARD_STATE_PENDING);
+    expect(status!.action.agentgate_action_id).toBeNull();
+    expect(status!.action.outcome).toBeNull();
   });
 
   it("writes one reservation and one checkpoint reservation event per successful call", async () => {
@@ -342,6 +394,7 @@ describe("checkpoint server — execute endpoint", () => {
     await expect(response.json()).resolves.toMatchObject({
       ok: true,
       stage: "reserved",
+      forwardState: "pending_forward",
       actionType: "file-transform",
     });
     expect(getActions(delegation.id)).toHaveLength(1);
@@ -374,6 +427,7 @@ describe("checkpoint server — execute endpoint", () => {
     });
     expect(getActions(delegation.id)).toHaveLength(0);
     expect(getCheckpointReservedEvents(delegation.id)).toHaveLength(0);
+    expect(getCheckpointReservationForwardStatus("missing")).toBeNull();
   });
 
   it("enforces max_actions before creating another reservation", async () => {
