@@ -48,6 +48,7 @@ function initSchema(db: Database.Database): void {
       agentgate_action_id       TEXT,
       forward_state             TEXT,
       action_type               TEXT NOT NULL,
+      payload_json              TEXT,
       declared_exposure_cents    INTEGER NOT NULL,
       effective_exposure_cents   INTEGER NOT NULL,
       outcome                   TEXT,
@@ -67,6 +68,7 @@ function initSchema(db: Database.Database): void {
   `);
 
   ensureColumn(db, "delegation_actions", "forward_state", "TEXT");
+  ensureColumn(db, "delegation_actions", "payload_json", "TEXT");
 }
 
 function ensureColumn(

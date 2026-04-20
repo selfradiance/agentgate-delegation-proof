@@ -67,6 +67,7 @@ export interface DelegationActionRow {
   agentgate_action_id: string | null;
   forward_state: CheckpointForwardState | null;
   action_type: string;
+  payload_json: string | null;
   declared_exposure_cents: number;
   effective_exposure_cents: number;
   outcome: string | null;
@@ -237,6 +238,7 @@ export interface CheckpointReservationParams {
   delegationId: string;
   actorPublicKey: string;
   actionType: string;
+  payload: unknown;
   declaredExposureCents: number;
 }
 
@@ -281,6 +283,16 @@ export interface CheckpointReservationExecuteEligibility {
   reservationId: string;
   eligible: boolean;
   code: CheckpointReservationExecuteEligibilityCode;
+}
+
+export interface CheckpointPreparedExecuteInput {
+  reservationId: string;
+  delegationId: string;
+  delegateId: string;
+  actionType: string;
+  payload: unknown;
+  declaredExposureCents: number;
+  effectiveExposureCents: number;
 }
 
 export class CheckpointReservationError extends Error {
@@ -371,6 +383,27 @@ export class CheckpointForwardFinalizationError extends Error {
   ) {
     super(message);
     this.name = "CheckpointForwardFinalizationError";
+    this.code = code;
+  }
+}
+
+export class CheckpointExecutePreparationError extends Error {
+  code:
+    | CheckpointReservationExecuteEligibilityCode
+    | "DELEGATION_NOT_FOUND"
+    | "PAYLOAD_NOT_RECORDED"
+    | "PREPARE_INPUT_FAILED";
+
+  constructor(
+    code:
+      | CheckpointReservationExecuteEligibilityCode
+      | "DELEGATION_NOT_FOUND"
+      | "PAYLOAD_NOT_RECORDED"
+      | "PREPARE_INPUT_FAILED",
+    message: string
+  ) {
+    super(message);
+    this.name = "CheckpointExecutePreparationError";
     this.code = code;
   }
 }
@@ -477,13 +510,14 @@ export function reserveCheckpointAction(
 
     db.prepare(
       `INSERT INTO delegation_actions
-       (id, delegation_id, forward_state, action_type, declared_exposure_cents, effective_exposure_cents, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
+       (id, delegation_id, forward_state, action_type, payload_json, declared_exposure_cents, effective_exposure_cents, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       reservationId,
       txParams.delegationId,
       CHECKPOINT_FORWARD_STATE_PENDING,
       txParams.actionType,
+      JSON.stringify(txParams.payload),
       txParams.declaredExposureCents,
       effective,
       now
@@ -644,6 +678,81 @@ export function isCheckpointReservationExecuteEligible(
     eligible: false,
     code: "PRE_ATTACHMENT_FAILED",
   };
+}
+
+export function prepareCheckpointExecuteInput(
+  reservationId: string
+): CheckpointPreparedExecuteInput {
+  const eligibility = isCheckpointReservationExecuteEligible(reservationId);
+
+  if (!eligibility.eligible) {
+    const messages: Record<
+      Exclude<CheckpointReservationExecuteEligibilityCode, "ELIGIBLE">,
+      string
+    > = {
+      NOT_FOUND: "Checkpoint reservation not found",
+      NOT_IN_FORWARD: "Checkpoint reservation is not currently in_forward",
+      ALREADY_FORWARDED:
+        "Checkpoint reservation already has an attached AgentGate action id",
+      ALREADY_FINALIZED: "Checkpoint reservation is already finalized",
+      PRE_ATTACHMENT_FAILED:
+        "Checkpoint reservation already failed before attachment",
+    };
+
+    throw new CheckpointExecutePreparationError(
+      eligibility.code,
+      messages[
+        eligibility.code as Exclude<
+          CheckpointReservationExecuteEligibilityCode,
+          "ELIGIBLE"
+        >
+      ]
+    );
+  }
+
+  const db = getDb();
+  const action = db
+    .prepare("SELECT * FROM delegation_actions WHERE id = ?")
+    .get(reservationId) as DelegationActionRow | undefined;
+
+  if (!action) {
+    throw new CheckpointExecutePreparationError(
+      "PREPARE_INPUT_FAILED",
+      "Execute-eligible checkpoint reservation disappeared before preparation"
+    );
+  }
+
+  const delegation = getDelegation(action.delegation_id);
+  if (!delegation) {
+    throw new CheckpointExecutePreparationError(
+      "DELEGATION_NOT_FOUND",
+      "Delegation for checkpoint reservation not found"
+    );
+  }
+
+  if (action.payload_json === null) {
+    throw new CheckpointExecutePreparationError(
+      "PAYLOAD_NOT_RECORDED",
+      "Checkpoint reservation has no recorded payload"
+    );
+  }
+
+  try {
+    return {
+      reservationId: action.id,
+      delegationId: action.delegation_id,
+      delegateId: delegation.delegate_id,
+      actionType: action.action_type,
+      payload: JSON.parse(action.payload_json),
+      declaredExposureCents: action.declared_exposure_cents,
+      effectiveExposureCents: action.effective_exposure_cents,
+    };
+  } catch {
+    throw new CheckpointExecutePreparationError(
+      "PREPARE_INPUT_FAILED",
+      "Checkpoint reservation payload could not be prepared"
+    );
+  }
 }
 
 export function startCheckpointForwardAttempt(

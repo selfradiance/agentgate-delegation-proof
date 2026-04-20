@@ -64,6 +64,7 @@ describe("db — schema", () => {
       "agentgate_action_id",
       "forward_state",
       "action_type",
+      "payload_json",
       "declared_exposure_cents",
       "effective_exposure_cents",
       "outcome",

@@ -253,6 +253,7 @@ export async function handleCheckpointRequest(
       delegationId: pathResult.data.delegationId,
       actorPublicKey: requestResult.data.auth.delegateId,
       actionType: requestResult.data.actionType,
+      payload: requestResult.data.payload,
       declaredExposureCents: requestResult.data.declaredExposureCents,
     });
 

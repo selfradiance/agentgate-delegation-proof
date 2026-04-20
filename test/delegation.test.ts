@@ -8,6 +8,7 @@ import {
   CHECKPOINT_FORWARD_STATE_FORWARDED,
   CHECKPOINT_FORWARD_STATE_IN_FORWARD,
   CHECKPOINT_FORWARD_STATE_PENDING,
+  CheckpointExecutePreparationError,
   CheckpointForwardAttachmentError,
   CheckpointForwardTransitionError,
   createDelegation,
@@ -23,6 +24,7 @@ import {
   finalizeCheckpointForwardedAction,
   getCheckpointReservationExecutionStatus,
   isCheckpointReservationExecuteEligible,
+  prepareCheckpointExecuteInput,
   resolveAction,
   revokeDelegation,
   closeDelegation,
@@ -400,6 +402,7 @@ describe("checkpoint forward transition", () => {
       delegationId: d.id,
       actorPublicKey: "agent-pub-key",
       actionType: "email-rewrite",
+      payload: { input: "draft" },
       declaredExposureCents: 50,
     });
 
@@ -431,6 +434,7 @@ describe("checkpoint forward transition", () => {
       delegationId: d.id,
       actorPublicKey: "agent-pub-key",
       actionType: "email-rewrite",
+      payload: { input: "draft" },
       declaredExposureCents: 50,
     });
 
@@ -475,6 +479,7 @@ describe("checkpoint forward transition", () => {
       delegationId: d.id,
       actorPublicKey: "agent-pub-key",
       actionType: "email-rewrite",
+      payload: { input: "draft" },
       declaredExposureCents: 50,
     });
 
@@ -504,6 +509,7 @@ describe("checkpoint forward attachment", () => {
       delegationId,
       actorPublicKey: "agent-pub-key",
       actionType: "email-rewrite",
+      payload: { input: "draft" },
       declaredExposureCents: 50,
     });
 
@@ -579,6 +585,7 @@ describe("checkpoint forward attachment", () => {
       delegationId: d.id,
       actorPublicKey: "agent-pub-key",
       actionType: "email-rewrite",
+      payload: { input: "draft" },
       declaredExposureCents: 50,
     });
 
@@ -619,6 +626,7 @@ describe("checkpoint forward finalization", () => {
       delegationId,
       actorPublicKey: "agent-pub-key",
       actionType: "email-rewrite",
+      payload: { input: "draft" },
       declaredExposureCents: 50,
     });
 
@@ -711,6 +719,7 @@ describe("checkpoint forward finalization", () => {
       delegationId: d.id,
       actorPublicKey: "agent-pub-key",
       actionType: "email-rewrite",
+      payload: { input: "draft" },
       declaredExposureCents: 50,
     });
 
@@ -728,6 +737,7 @@ describe("checkpoint forward finalization", () => {
       delegationId: d.id,
       actorPublicKey: "agent-pub-key",
       actionType: "email-rewrite",
+      payload: { input: "draft" },
       declaredExposureCents: 50,
     });
 
@@ -747,6 +757,7 @@ describe("checkpoint forward finalization", () => {
       delegationId: d.id,
       actorPublicKey: "agent-pub-key",
       actionType: "email-rewrite",
+      payload: { input: "draft" },
       declaredExposureCents: 50,
     });
 
@@ -804,6 +815,7 @@ describe("checkpoint forward failure", () => {
       delegationId,
       actorPublicKey: "agent-pub-key",
       actionType: "email-rewrite",
+      payload: { input: "draft" },
       declaredExposureCents: 50,
     });
 
@@ -850,6 +862,7 @@ describe("checkpoint forward failure", () => {
       delegationId: d.id,
       actorPublicKey: "agent-pub-key",
       actionType: "email-rewrite",
+      payload: { input: "draft" },
       declaredExposureCents: 50,
     });
 
@@ -916,6 +929,7 @@ describe("checkpoint reservation execution status", () => {
       delegationId,
       actorPublicKey: "agent-pub-key",
       actionType: "email-rewrite",
+      payload: { input: "draft" },
       declaredExposureCents: 50,
     }).reservationId;
   }
@@ -1049,6 +1063,7 @@ describe("checkpoint execute eligibility", () => {
       delegationId,
       actorPublicKey: "agent-pub-key",
       actionType: "email-rewrite",
+      payload: { input: "draft" },
       declaredExposureCents: 50,
     }).reservationId;
   }
@@ -1147,6 +1162,100 @@ describe("checkpoint execute eligibility", () => {
       eligible: false,
       code: "NOT_FOUND",
     });
+  });
+});
+
+describe("checkpoint execute input preparation", () => {
+  function acceptDelegation(id: string): void {
+    claimForAccept(id, "agent-pub-key");
+    finalizeAccept(id, "agent-bond-456");
+  }
+
+  function expectPrepareError(run: () => unknown, code: string): void {
+    expect(run).toThrowError(
+      expect.objectContaining({
+        name: "CheckpointExecutePreparationError",
+        code,
+      })
+    );
+  }
+
+  function createExecuteEligibleReservation(
+    delegationId: string,
+    payload: unknown = { input: "rewrite this draft" }
+  ): string {
+    const reservation = reserveCheckpointAction({
+      delegationId,
+      actorPublicKey: "agent-pub-key",
+      actionType: "email-rewrite",
+      payload,
+      declaredExposureCents: 50,
+    });
+
+    startCheckpointForwardAttempt(reservation.reservationId);
+    return reservation.reservationId;
+  }
+
+  it("returns the expected prepared input shape for an execute-eligible reservation", () => {
+    const d = makeTestDelegation();
+    acceptDelegation(d.id);
+    const reservationId = createExecuteEligibleReservation(d.id);
+
+    expect(prepareCheckpointExecuteInput(reservationId)).toEqual({
+      reservationId,
+      delegationId: d.id,
+      delegateId: "agent-pub-key",
+      actionType: "email-rewrite",
+      payload: { input: "rewrite this draft" },
+      declaredExposureCents: 50,
+      effectiveExposureCents: 60,
+    });
+  });
+
+  it("rejects an ineligible reservation clearly", () => {
+    const d = makeTestDelegation();
+    acceptDelegation(d.id);
+    const reservationId = reserveCheckpointAction({
+      delegationId: d.id,
+      actorPublicKey: "agent-pub-key",
+      actionType: "email-rewrite",
+      payload: { input: "draft" },
+      declaredExposureCents: 50,
+    }).reservationId;
+
+    expectPrepareError(
+      () => prepareCheckpointExecuteInput(reservationId),
+      "NOT_IN_FORWARD"
+    );
+  });
+
+  it("rejects a missing reservation clearly", () => {
+    expectPrepareError(
+      () => prepareCheckpointExecuteInput("missing"),
+      "NOT_FOUND"
+    );
+  });
+
+  it("includes action, payload, exposure, and delegation metadata", () => {
+    const d = makeTestDelegation();
+    acceptDelegation(d.id);
+    const reservationId = createExecuteEligibleReservation(d.id, {
+      file: "draft.txt",
+      transform: "rewrite",
+    });
+
+    const prepared = prepareCheckpointExecuteInput(reservationId);
+
+    expect(prepared.reservationId).toBe(reservationId);
+    expect(prepared.delegationId).toBe(d.id);
+    expect(prepared.delegateId).toBe("agent-pub-key");
+    expect(prepared.actionType).toBe("email-rewrite");
+    expect(prepared.payload).toEqual({
+      file: "draft.txt",
+      transform: "rewrite",
+    });
+    expect(prepared.declaredExposureCents).toBe(50);
+    expect(prepared.effectiveExposureCents).toBe(60);
   });
 });
 

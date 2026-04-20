@@ -204,6 +204,9 @@ describe("checkpoint server — execute endpoint", () => {
     expect(actions[0].delegation_id).toBe(delegation.id);
     expect(actions[0].forward_state).toBe(CHECKPOINT_FORWARD_STATE_PENDING);
     expect(actions[0].action_type).toBe("email-rewrite");
+    expect(actions[0].payload_json).toBe(
+      JSON.stringify(VALID_REQUEST_TEMPLATE.payload)
+    );
     expect(actions[0].declared_exposure_cents).toBe(83);
     expect(actions[0].effective_exposure_cents).toBe(100);
     expect(actions[0].agentgate_action_id).toBeNull();
