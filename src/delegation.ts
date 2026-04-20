@@ -235,10 +235,24 @@ export interface CheckpointReservationResult {
 }
 
 export class CheckpointReservationError extends Error {
-  code: "DELEGATION_NOT_FOUND" | "DELEGATE_MISMATCH" | "RESERVATION_FAILED";
+  code:
+    | "DELEGATION_NOT_FOUND"
+    | "DELEGATE_MISMATCH"
+    | "ACTION_TYPE_NOT_ALLOWED"
+    | "MAX_ACTIONS_EXCEEDED"
+    | "PER_ACTION_EXPOSURE_EXCEEDED"
+    | "MAX_TOTAL_EXPOSURE_EXCEEDED"
+    | "RESERVATION_FAILED";
 
   constructor(
-    code: "DELEGATION_NOT_FOUND" | "DELEGATE_MISMATCH" | "RESERVATION_FAILED",
+    code:
+      | "DELEGATION_NOT_FOUND"
+      | "DELEGATE_MISMATCH"
+      | "ACTION_TYPE_NOT_ALLOWED"
+      | "MAX_ACTIONS_EXCEEDED"
+      | "PER_ACTION_EXPOSURE_EXCEEDED"
+      | "MAX_TOTAL_EXPOSURE_EXCEEDED"
+      | "RESERVATION_FAILED",
     message: string
   ) {
     super(message);
@@ -270,9 +284,59 @@ export function reserveCheckpointAction(
       );
     }
 
+    const scope: DelegationScope = JSON.parse(delegation.scope_json);
+    const effective = effectiveExposure(txParams.declaredExposureCents);
+    const maxPerActionEffective = effectiveExposure(scope.max_exposure_cents);
+
+    if (!scope.allowed_actions.includes(txParams.actionType)) {
+      throw new CheckpointReservationError(
+        "ACTION_TYPE_NOT_ALLOWED",
+        `Action type "${txParams.actionType}" is outside delegated scope`
+      );
+    }
+
+    // For Baby Step 4, all existing rows in delegation_actions for this
+    // delegation count toward max_actions and total exposure. That includes
+    // prior checkpoint reservations and any later execution rows because the
+    // finalize/revert split is not introduced yet.
+    const summary = db
+      .prepare(
+        `SELECT
+           COUNT(*) as action_count,
+           COALESCE(SUM(effective_exposure_cents), 0) as total_effective_exposure_cents
+         FROM delegation_actions
+         WHERE delegation_id = ?`
+      )
+      .get(txParams.delegationId) as ActionSummaryRow;
+
+    if (summary.action_count >= scope.max_actions) {
+      throw new CheckpointReservationError(
+        "MAX_ACTIONS_EXCEEDED",
+        `Creating another reservation would exceed max_actions ${scope.max_actions}`
+      );
+    }
+
+    if (
+      txParams.declaredExposureCents > scope.max_exposure_cents ||
+      effective > maxPerActionEffective
+    ) {
+      throw new CheckpointReservationError(
+        "PER_ACTION_EXPOSURE_EXCEEDED",
+        `Declared exposure ${txParams.declaredExposureCents}¢ / effective exposure ${effective}¢ exceeds per-action limit ${scope.max_exposure_cents}¢ / ${maxPerActionEffective}¢ effective`
+      );
+    }
+
+    const projectedTotal =
+      (summary.total_effective_exposure_cents ?? 0) + effective;
+    if (projectedTotal > scope.max_total_exposure_cents) {
+      throw new CheckpointReservationError(
+        "MAX_TOTAL_EXPOSURE_EXCEEDED",
+        `Projected total effective exposure ${projectedTotal}¢ exceeds max_total_exposure_cents ${scope.max_total_exposure_cents}¢`
+      );
+    }
+
     const reservationId = randomUUID();
     const now = new Date().toISOString();
-    const effective = effectiveExposure(txParams.declaredExposureCents);
 
     db.prepare(
       `INSERT INTO delegation_actions

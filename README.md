@@ -32,7 +32,7 @@ AgentGate must be running for this project to work.
 - Bond TTL alignment (human bond = delegation TTL + 1hr margin)
 - Auto-complete on scope exhaustion
 - Crash recovery for orphaned action reservations
-- v0.2 Baby Step 3: checkpoint endpoint at `POST /v1/delegations/:id/execute` now performs strict request-shape validation, delegation lookup, delegate identity binding, timestamp freshness checks, signature verification, then creates a local reservation and returns a stub `stage: "reserved"` response
+- v0.2 Baby Step 4: checkpoint endpoint at `POST /v1/delegations/:id/execute` now performs strict request-shape validation, delegation lookup, delegate identity binding, timestamp freshness checks, signature verification, then enforces narrow scope limits inside the reservation transaction before returning `stage: "reserved"`
 
 ## Quick Start
 
@@ -69,7 +69,7 @@ npx tsx src/cli.ts status --delegation-id <id>
 
 ## Tests
 
-104 tests across 8 files. 3 integration tests (opt-in via `RUN_INTEGRATION_TESTS=1`, requires live AgentGate).
+110 tests across 8 files. 3 integration tests (opt-in via `RUN_INTEGRATION_TESTS=1`, requires live AgentGate).
 
 ```bash
 npm test
@@ -82,7 +82,7 @@ npm test
 
 ## Status
 
-v0.1.0 shipped and credible. v0.2 Baby Step 3 added the first local checkpoint reservation boundary only. No scope enforcement or AgentGate execution yet. 104 tests.
+v0.1.0 shipped and credible. v0.2 Baby Step 4 added the first real concurrency-safe scope checks inside the local checkpoint reservation path. No AgentGate execution yet. 110 tests.
 
 Planned next work: [v0.2 server-mediated scope enforcement](docs/v0.2-server-mediated-scope-enforcement.md).
 

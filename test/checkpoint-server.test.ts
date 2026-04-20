@@ -48,16 +48,29 @@ function generateTestKeys(): CheckpointSignerKeys {
 }
 
 function createAcceptedDelegation(delegateKeys: CheckpointSignerKeys): DelegationRow {
+  return createAcceptedDelegationWithScope(delegateKeys, {
+    allowed_actions: ["email-rewrite"],
+    max_actions: 3,
+    max_exposure_cents: 83,
+    max_total_exposure_cents: 250,
+    description: "Rewrite emails",
+  });
+}
+
+function createAcceptedDelegationWithScope(
+  delegateKeys: CheckpointSignerKeys,
+  scope: {
+    allowed_actions: string[];
+    max_actions: number;
+    max_exposure_cents: number;
+    max_total_exposure_cents: number;
+    description: string;
+  }
+): DelegationRow {
   const delegation = createDelegation({
     delegatorId: "human-pub-key",
     delegateId: delegateKeys.publicKey,
-    scope: {
-      allowed_actions: ["email-rewrite"],
-      max_actions: 3,
-      max_exposure_cents: 83,
-      max_total_exposure_cents: 250,
-      description: "Rewrite emails",
-    },
+    scope,
     delegatorBondId: "human-bond-123",
     ttlSeconds: 3600,
   });
@@ -150,6 +163,12 @@ async function startServer(): Promise<{ server: Server; baseUrl: string }> {
   };
 }
 
+function getCheckpointReservedEvents(delegationId: string) {
+  return getEvents(delegationId).filter(
+    (event) => event.event_type === "checkpoint_action_reserved"
+  );
+}
+
 describe("checkpoint server — execute endpoint", () => {
   it('creates one reservation for a valid authenticated request and returns stage "reserved"', async () => {
     const delegateKeys = generateTestKeys();
@@ -189,7 +208,13 @@ describe("checkpoint server — execute endpoint", () => {
 
   it("associates the reservation with the correct delegation and delegate event trail", async () => {
     const delegateKeys = generateTestKeys();
-    const delegation = createAcceptedDelegation(delegateKeys);
+    const delegation = createAcceptedDelegationWithScope(delegateKeys, {
+      allowed_actions: ["email-rewrite", "file-transform"],
+      max_actions: 3,
+      max_exposure_cents: 83,
+      max_total_exposure_cents: 250,
+      description: "Rewrite or transform",
+    });
     const { baseUrl } = await startServer();
     const requestBody = buildSignedRequest(delegation.id, delegateKeys, {
       actionType: "file-transform",
@@ -242,11 +267,7 @@ describe("checkpoint server — execute endpoint", () => {
 
     expect(response.status).toBe(200);
     expect(getActions(delegation.id)).toHaveLength(1);
-    expect(
-      getEvents(delegation.id).filter(
-        (event) => event.event_type === "checkpoint_action_reserved"
-      )
-    ).toHaveLength(1);
+    expect(getCheckpointReservedEvents(delegation.id)).toHaveLength(1);
   });
 
   it("creates distinct reservations for two sequential authenticated calls", async () => {
@@ -289,6 +310,259 @@ describe("checkpoint server — execute endpoint", () => {
       firstBody.reservationId,
       secondBody.reservationId,
     ]);
+  });
+
+  it("allows an action type that is in delegated scope and still reserves", async () => {
+    const delegateKeys = generateTestKeys();
+    const delegation = createAcceptedDelegationWithScope(delegateKeys, {
+      allowed_actions: ["email-rewrite", "file-transform"],
+      max_actions: 3,
+      max_exposure_cents: 83,
+      max_total_exposure_cents: 250,
+      description: "Rewrite or transform",
+    });
+    const { baseUrl } = await startServer();
+
+    const response = await fetch(
+      `${baseUrl}/v1/delegations/${delegation.id}/execute`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(
+          buildSignedRequest(delegation.id, delegateKeys, {
+            actionType: "file-transform",
+            declaredExposureCents: 10,
+            payload: { file: "draft.txt" },
+          })
+        ),
+      }
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      stage: "reserved",
+      actionType: "file-transform",
+    });
+    expect(getActions(delegation.id)).toHaveLength(1);
+  });
+
+  it("rejects a disallowed action type and creates no reservation", async () => {
+    const delegateKeys = generateTestKeys();
+    const delegation = createAcceptedDelegation(delegateKeys);
+    const { baseUrl } = await startServer();
+
+    const response = await fetch(
+      `${baseUrl}/v1/delegations/${delegation.id}/execute`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(
+          buildSignedRequest(delegation.id, delegateKeys, {
+            actionType: "delete-file",
+            payload: { file: "draft.txt" },
+          })
+        ),
+      }
+    );
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      code: "ACTION_TYPE_NOT_ALLOWED",
+      message: 'Action type "delete-file" is outside delegated scope',
+    });
+    expect(getActions(delegation.id)).toHaveLength(0);
+    expect(getCheckpointReservedEvents(delegation.id)).toHaveLength(0);
+  });
+
+  it("enforces max_actions before creating another reservation", async () => {
+    const delegateKeys = generateTestKeys();
+    const delegation = createAcceptedDelegationWithScope(delegateKeys, {
+      allowed_actions: ["email-rewrite"],
+      max_actions: 1,
+      max_exposure_cents: 83,
+      max_total_exposure_cents: 250,
+      description: "One action only",
+    });
+    const { baseUrl } = await startServer();
+
+    const firstResponse = await fetch(
+      `${baseUrl}/v1/delegations/${delegation.id}/execute`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(buildSignedRequest(delegation.id, delegateKeys)),
+      }
+    );
+
+    const secondResponse = await fetch(
+      `${baseUrl}/v1/delegations/${delegation.id}/execute`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(buildSignedRequest(delegation.id, delegateKeys)),
+      }
+    );
+
+    expect(firstResponse.status).toBe(200);
+    expect(secondResponse.status).toBe(409);
+    await expect(secondResponse.json()).resolves.toEqual({
+      ok: false,
+      code: "MAX_ACTIONS_EXCEEDED",
+      message: "Creating another reservation would exceed max_actions 1",
+    });
+    expect(getActions(delegation.id)).toHaveLength(1);
+    expect(getCheckpointReservedEvents(delegation.id)).toHaveLength(1);
+  });
+
+  it("enforces the per-action exposure cap", async () => {
+    const delegateKeys = generateTestKeys();
+    const delegation = createAcceptedDelegationWithScope(delegateKeys, {
+      allowed_actions: ["email-rewrite"],
+      max_actions: 3,
+      max_exposure_cents: 50,
+      max_total_exposure_cents: 250,
+      description: "Low exposure cap",
+    });
+    const { baseUrl } = await startServer();
+
+    const response = await fetch(
+      `${baseUrl}/v1/delegations/${delegation.id}/execute`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(
+          buildSignedRequest(delegation.id, delegateKeys, {
+            declaredExposureCents: 51,
+          })
+        ),
+      }
+    );
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: false,
+      code: "PER_ACTION_EXPOSURE_EXCEEDED",
+      message: expect.stringContaining("Declared exposure 51"),
+    });
+    expect(getActions(delegation.id)).toHaveLength(0);
+    expect(getCheckpointReservedEvents(delegation.id)).toHaveLength(0);
+  });
+
+  it("enforces max total exposure across existing reservations", async () => {
+    const delegateKeys = generateTestKeys();
+    const delegation = createAcceptedDelegationWithScope(delegateKeys, {
+      allowed_actions: ["email-rewrite"],
+      max_actions: 3,
+      max_exposure_cents: 50,
+      max_total_exposure_cents: 100,
+      description: "Tight total exposure cap",
+    });
+    const { baseUrl } = await startServer();
+
+    const firstResponse = await fetch(
+      `${baseUrl}/v1/delegations/${delegation.id}/execute`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(
+          buildSignedRequest(delegation.id, delegateKeys, {
+            declaredExposureCents: 50,
+          })
+        ),
+      }
+    );
+
+    const secondResponse = await fetch(
+      `${baseUrl}/v1/delegations/${delegation.id}/execute`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(
+          buildSignedRequest(delegation.id, delegateKeys, {
+            declaredExposureCents: 50,
+            payload: { input: "second reservation" },
+          })
+        ),
+      }
+    );
+
+    expect(firstResponse.status).toBe(200);
+    expect(secondResponse.status).toBe(409);
+    await expect(secondResponse.json()).resolves.toEqual({
+      ok: false,
+      code: "MAX_TOTAL_EXPOSURE_EXCEEDED",
+      message:
+        "Projected total effective exposure 120¢ exceeds max_total_exposure_cents 100¢",
+    });
+    expect(getActions(delegation.id)).toHaveLength(1);
+    expect(getCheckpointReservedEvents(delegation.id)).toHaveLength(1);
+  });
+
+  it("handles sequential requests near the total exposure limit correctly", async () => {
+    const delegateKeys = generateTestKeys();
+    const delegation = createAcceptedDelegationWithScope(delegateKeys, {
+      allowed_actions: ["email-rewrite"],
+      max_actions: 5,
+      max_exposure_cents: 50,
+      max_total_exposure_cents: 120,
+      description: "Near-limit sequence",
+    });
+    const { baseUrl } = await startServer();
+
+    const firstResponse = await fetch(
+      `${baseUrl}/v1/delegations/${delegation.id}/execute`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(
+          buildSignedRequest(delegation.id, delegateKeys, {
+            declaredExposureCents: 50,
+          })
+        ),
+      }
+    );
+
+    const secondResponse = await fetch(
+      `${baseUrl}/v1/delegations/${delegation.id}/execute`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(
+          buildSignedRequest(delegation.id, delegateKeys, {
+            declaredExposureCents: 50,
+            payload: { input: "second" },
+          })
+        ),
+      }
+    );
+
+    const thirdResponse = await fetch(
+      `${baseUrl}/v1/delegations/${delegation.id}/execute`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(
+          buildSignedRequest(delegation.id, delegateKeys, {
+            declaredExposureCents: 1,
+            payload: { input: "third" },
+          })
+        ),
+      }
+    );
+
+    expect(firstResponse.status).toBe(200);
+    expect(secondResponse.status).toBe(200);
+    expect(thirdResponse.status).toBe(409);
+    await expect(thirdResponse.json()).resolves.toEqual({
+      ok: false,
+      code: "MAX_TOTAL_EXPOSURE_EXCEEDED",
+      message:
+        "Projected total effective exposure 122¢ exceeds max_total_exposure_cents 120¢",
+    });
+    expect(getActions(delegation.id)).toHaveLength(2);
+    expect(getCheckpointReservedEvents(delegation.id)).toHaveLength(2);
   });
 
   it("returns DELEGATION_NOT_FOUND when the delegation does not exist", async () => {
@@ -459,11 +733,7 @@ describe("checkpoint server — execute endpoint", () => {
       message: "Failed to create local checkpoint reservation",
     });
     expect(getActions(delegation.id)).toHaveLength(0);
-    expect(
-      getEvents(delegation.id).filter(
-        (event) => event.event_type === "checkpoint_action_reserved"
-      )
-    ).toHaveLength(0);
+    expect(getCheckpointReservedEvents(delegation.id)).toHaveLength(0);
   });
 
   it("rejects requests with missing required fields", async () => {

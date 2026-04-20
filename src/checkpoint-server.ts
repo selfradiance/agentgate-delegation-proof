@@ -26,6 +26,10 @@ export type CheckpointErrorCode =
   | "DELEGATE_MISMATCH"
   | "TIMESTAMP_OUT_OF_WINDOW"
   | "INVALID_SIGNATURE"
+  | "ACTION_TYPE_NOT_ALLOWED"
+  | "MAX_ACTIONS_EXCEEDED"
+  | "PER_ACTION_EXPOSURE_EXCEEDED"
+  | "MAX_TOTAL_EXPOSURE_EXCEEDED"
   | "RESERVATION_FAILED";
 
 interface CheckpointErrorResponse {
@@ -265,6 +269,11 @@ export async function handleCheckpointRequest(
           ? 404
           : error.code === "DELEGATE_MISMATCH"
             ? 403
+            : error.code === "ACTION_TYPE_NOT_ALLOWED" ||
+                error.code === "MAX_ACTIONS_EXCEEDED" ||
+                error.code === "PER_ACTION_EXPOSURE_EXCEEDED" ||
+                error.code === "MAX_TOTAL_EXPOSURE_EXCEEDED"
+              ? 409
             : 500;
 
       sendJson(res, statusCode, {
