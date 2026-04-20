@@ -5,7 +5,11 @@ import {
   ExecuteDelegationRequestSchema,
   formatSchemaIssue,
 } from "./checkpoint-schema";
-import { getDelegation } from "./delegation";
+import {
+  CheckpointReservationError,
+  getDelegation,
+  reserveCheckpointAction,
+} from "./delegation";
 import {
   verifyCheckpointRequestSignature,
   type CheckpointSignableRequest,
@@ -21,7 +25,8 @@ export type CheckpointErrorCode =
   | "DELEGATION_NOT_ACTIVE"
   | "DELEGATE_MISMATCH"
   | "TIMESTAMP_OUT_OF_WINDOW"
-  | "INVALID_SIGNATURE";
+  | "INVALID_SIGNATURE"
+  | "RESERVATION_FAILED";
 
 interface CheckpointErrorResponse {
   ok: false;
@@ -31,9 +36,10 @@ interface CheckpointErrorResponse {
 
 interface CheckpointSuccessResponse {
   ok: true;
-  stage: "authenticated";
+  stage: "reserved";
   delegationId: string;
   actionType: string;
+  reservationId: string;
 }
 
 type CheckpointResponse = CheckpointErrorResponse | CheckpointSuccessResponse;
@@ -237,12 +243,40 @@ export async function handleCheckpointRequest(
     return;
   }
 
-  sendJson(res, 200, {
-    ok: true,
-    stage: "authenticated",
-    delegationId: pathResult.data.delegationId,
-    actionType: requestResult.data.actionType,
-  });
+  try {
+    const reservation = reserveCheckpointAction({
+      delegationId: pathResult.data.delegationId,
+      actorPublicKey: requestResult.data.auth.delegateId,
+      actionType: requestResult.data.actionType,
+      declaredExposureCents: requestResult.data.declaredExposureCents,
+    });
+
+    sendJson(res, 200, {
+      ok: true,
+      stage: "reserved",
+      delegationId: reservation.delegation.id,
+      actionType: requestResult.data.actionType,
+      reservationId: reservation.reservationId,
+    });
+  } catch (error) {
+    if (error instanceof CheckpointReservationError) {
+      const statusCode =
+        error.code === "DELEGATION_NOT_FOUND"
+          ? 404
+          : error.code === "DELEGATE_MISMATCH"
+            ? 403
+            : 500;
+
+      sendJson(res, statusCode, {
+        ok: false,
+        code: error.code,
+        message: error.message,
+      });
+      return;
+    }
+
+    throw error;
+  }
 }
 
 export function createCheckpointServer() {

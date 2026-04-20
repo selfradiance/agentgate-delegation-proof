@@ -222,6 +222,96 @@ export interface ActReservation {
   delegation: DelegationRow;
 }
 
+export interface CheckpointReservationParams {
+  delegationId: string;
+  actorPublicKey: string;
+  actionType: string;
+  declaredExposureCents: number;
+}
+
+export interface CheckpointReservationResult {
+  reservationId: string;
+  delegation: DelegationRow;
+}
+
+export class CheckpointReservationError extends Error {
+  code: "DELEGATION_NOT_FOUND" | "DELEGATE_MISMATCH" | "RESERVATION_FAILED";
+
+  constructor(
+    code: "DELEGATION_NOT_FOUND" | "DELEGATE_MISMATCH" | "RESERVATION_FAILED",
+    message: string
+  ) {
+    super(message);
+    this.name = "CheckpointReservationError";
+    this.code = code;
+  }
+}
+
+export function reserveCheckpointAction(
+  params: CheckpointReservationParams
+): CheckpointReservationResult {
+  const db = getDb();
+  const reserve = db.transaction((txParams: CheckpointReservationParams) => {
+    const delegation = db
+      .prepare("SELECT * FROM delegations WHERE id = ?")
+      .get(txParams.delegationId) as DelegationRow | undefined;
+
+    if (!delegation) {
+      throw new CheckpointReservationError(
+        "DELEGATION_NOT_FOUND",
+        "Delegation not found"
+      );
+    }
+
+    if (delegation.delegate_id !== txParams.actorPublicKey) {
+      throw new CheckpointReservationError(
+        "DELEGATE_MISMATCH",
+        "Only the bound delegate can reserve checkpoint actions"
+      );
+    }
+
+    const reservationId = randomUUID();
+    const now = new Date().toISOString();
+    const effective = effectiveExposure(txParams.declaredExposureCents);
+
+    db.prepare(
+      `INSERT INTO delegation_actions
+       (id, delegation_id, action_type, declared_exposure_cents, effective_exposure_cents, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).run(
+      reservationId,
+      txParams.delegationId,
+      txParams.actionType,
+      txParams.declaredExposureCents,
+      effective,
+      now
+    );
+
+    logEvent(txParams.delegationId, "checkpoint_action_reserved", {
+      reservation_id: reservationId,
+      delegate_id: txParams.actorPublicKey,
+      action_type: txParams.actionType,
+      declared_exposure_cents: txParams.declaredExposureCents,
+      effective_exposure_cents: effective,
+    });
+
+    return { reservationId, delegation };
+  });
+
+  try {
+    return reserve.immediate(params);
+  } catch (error) {
+    if (error instanceof CheckpointReservationError) {
+      throw error;
+    }
+
+    throw new CheckpointReservationError(
+      "RESERVATION_FAILED",
+      "Failed to create local checkpoint reservation"
+    );
+  }
+}
+
 /**
  * Phase 1 of act: validate scope and reserve an action slot.
  * Returns the action ID and delegation if valid, or a ScopeCheckResult if rejected.
