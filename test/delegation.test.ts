@@ -22,6 +22,7 @@ import {
   failCheckpointForwardAttempt,
   finalizeCheckpointForwardedAction,
   getCheckpointReservationExecutionStatus,
+  isCheckpointReservationExecuteEligible,
   resolveAction,
   revokeDelegation,
   closeDelegation,
@@ -1033,6 +1034,118 @@ describe("checkpoint reservation execution status", () => {
       outcome: null,
       agentgateActionId: null,
       resolvedAt: null,
+    });
+  });
+});
+
+describe("checkpoint execute eligibility", () => {
+  function acceptDelegation(id: string): void {
+    claimForAccept(id, "agent-pub-key");
+    finalizeAccept(id, "agent-bond-456");
+  }
+
+  function createPendingReservation(delegationId: string): string {
+    return reserveCheckpointAction({
+      delegationId,
+      actorPublicKey: "agent-pub-key",
+      actionType: "email-rewrite",
+      declaredExposureCents: 50,
+    }).reservationId;
+  }
+
+  it("reports eligible for an in_forward reservation", () => {
+    const d = makeTestDelegation();
+    acceptDelegation(d.id);
+    const reservationId = createPendingReservation(d.id);
+
+    startCheckpointForwardAttempt(reservationId);
+
+    expect(isCheckpointReservationExecuteEligible(reservationId)).toEqual({
+      reservationId,
+      eligible: true,
+      code: "ELIGIBLE",
+    });
+  });
+
+  it("reports not eligible for pending_forward", () => {
+    const d = makeTestDelegation();
+    acceptDelegation(d.id);
+    const reservationId = createPendingReservation(d.id);
+
+    expect(isCheckpointReservationExecuteEligible(reservationId)).toEqual({
+      reservationId,
+      eligible: false,
+      code: "NOT_IN_FORWARD",
+    });
+  });
+
+  it("reports not eligible for forwarded", () => {
+    const d = makeTestDelegation();
+    acceptDelegation(d.id);
+    const reservationId = createPendingReservation(d.id);
+
+    startCheckpointForwardAttempt(reservationId);
+    attachCheckpointForwardedAction(reservationId, "ag-checkpoint-001");
+
+    expect(isCheckpointReservationExecuteEligible(reservationId)).toEqual({
+      reservationId,
+      eligible: false,
+      code: "ALREADY_FORWARDED",
+    });
+  });
+
+  it("reports not eligible for finalized_success", () => {
+    const d = makeTestDelegation();
+    acceptDelegation(d.id);
+    const reservationId = createPendingReservation(d.id);
+
+    startCheckpointForwardAttempt(reservationId);
+    attachCheckpointForwardedAction(reservationId, "ag-checkpoint-001");
+    finalizeCheckpointForwardedAction(reservationId, "success");
+
+    expect(isCheckpointReservationExecuteEligible(reservationId)).toEqual({
+      reservationId,
+      eligible: false,
+      code: "ALREADY_FINALIZED",
+    });
+  });
+
+  it("reports not eligible for finalized_failed", () => {
+    const d = makeTestDelegation();
+    acceptDelegation(d.id);
+    const reservationId = createPendingReservation(d.id);
+
+    startCheckpointForwardAttempt(reservationId);
+    attachCheckpointForwardedAction(reservationId, "ag-checkpoint-001");
+    finalizeCheckpointForwardedAction(reservationId, "failed");
+
+    expect(isCheckpointReservationExecuteEligible(reservationId)).toEqual({
+      reservationId,
+      eligible: false,
+      code: "ALREADY_FINALIZED",
+    });
+  });
+
+  it("reports not eligible for pre_attachment_failed", () => {
+    const d = makeTestDelegation();
+    acceptDelegation(d.id);
+    const reservationId = createPendingReservation(d.id);
+
+    startCheckpointForwardAttempt(reservationId);
+    failCheckpointForwardAttempt(reservationId);
+
+    expect(isCheckpointReservationExecuteEligible(reservationId)).toEqual({
+      reservationId,
+      eligible: false,
+      code: "PRE_ATTACHMENT_FAILED",
+    });
+  });
+
+  it("reports not eligible for a missing reservation", () => {
+    expect(isCheckpointReservationExecuteEligible("missing")).toEqual({
+      reservationId: "missing",
+      eligible: false,
+      code: "NOT_FOUND",
     });
   });
 });

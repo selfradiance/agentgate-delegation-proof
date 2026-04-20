@@ -269,6 +269,20 @@ export interface CheckpointReservationExecutionStatus {
   resolvedAt: string | null;
 }
 
+export type CheckpointReservationExecuteEligibilityCode =
+  | "ELIGIBLE"
+  | "NOT_FOUND"
+  | "NOT_IN_FORWARD"
+  | "ALREADY_FORWARDED"
+  | "ALREADY_FINALIZED"
+  | "PRE_ATTACHMENT_FAILED";
+
+export interface CheckpointReservationExecuteEligibility {
+  reservationId: string;
+  eligible: boolean;
+  code: CheckpointReservationExecuteEligibilityCode;
+}
+
 export class CheckpointReservationError extends Error {
   code:
     | "DELEGATION_NOT_FOUND"
@@ -570,6 +584,65 @@ export function getCheckpointReservationExecutionStatus(
     outcome: action.outcome,
     agentgateActionId: action.agentgate_action_id,
     resolvedAt: action.resolved_at,
+  };
+}
+
+export function isCheckpointReservationExecuteEligible(
+  reservationId: string
+): CheckpointReservationExecuteEligibility {
+  const status = getCheckpointReservationExecutionStatus(reservationId);
+
+  if (
+    status.status === "in_forward" &&
+    status.agentgateActionId === null &&
+    status.outcome === null
+  ) {
+    return {
+      reservationId: status.reservationId,
+      eligible: true,
+      code: "ELIGIBLE",
+    };
+  }
+
+  if (status.status === "not_found") {
+    return {
+      reservationId: status.reservationId,
+      eligible: false,
+      code: "NOT_FOUND",
+    };
+  }
+
+  if (status.status === "pending_forward") {
+    return {
+      reservationId: status.reservationId,
+      eligible: false,
+      code: "NOT_IN_FORWARD",
+    };
+  }
+
+  if (status.status === "forwarded") {
+    return {
+      reservationId: status.reservationId,
+      eligible: false,
+      code: "ALREADY_FORWARDED",
+    };
+  }
+
+  if (
+    status.status === "finalized_success" ||
+    status.status === "finalized_failed"
+  ) {
+    return {
+      reservationId: status.reservationId,
+      eligible: false,
+      code: "ALREADY_FINALIZED",
+    };
+  }
+
+  return {
+    reservationId: status.reservationId,
+    eligible: false,
+    code: "PRE_ATTACHMENT_FAILED",
   };
 }
 

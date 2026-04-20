@@ -32,7 +32,7 @@ AgentGate must be running for this project to work.
 - Bond TTL alignment (human bond = delegation TTL + 1hr margin)
 - Auto-complete on scope exhaustion
 - Crash recovery for orphaned action reservations
-- v0.2 Baby Step 10: one narrow helper now reports the current local checkpoint execution status for a reservation across `pending_forward`, `in_forward`, `forwarded`, finalized success/failed, pre-attachment failure, and `not_found`, without adding orchestration or new persistence
+- v0.2 Baby Step 11: one narrow helper now answers whether a checkpoint reservation is eligible for a future real execute handoff right now, using the normalized local status view and returning only minimal eligibility metadata
 
 ## Quick Start
 
@@ -69,7 +69,7 @@ npx tsx src/cli.ts status --delegation-id <id>
 
 ## Tests
 
-143 tests across 8 files. 3 integration tests (opt-in via `RUN_INTEGRATION_TESTS=1`, requires live AgentGate).
+150 tests across 8 files. 3 integration tests (opt-in via `RUN_INTEGRATION_TESTS=1`, requires live AgentGate).
 
 ```bash
 npm test
@@ -82,7 +82,7 @@ npm test
 
 ## Status
 
-v0.1.0 shipped and credible. v0.2 Baby Step 10 adds a single normalized execution-status read helper for checkpoint reservations. Still no AgentGate execution or orchestration layer. 143 tests.
+v0.1.0 shipped and credible. v0.2 Baby Step 11 adds a single execute-eligibility helper for checkpoint reservations built on the normalized local status view. Still no AgentGate execution or orchestration layer. 150 tests.
 
 Planned next work: [v0.2 server-mediated scope enforcement](docs/v0.2-server-mediated-scope-enforcement.md).
 
