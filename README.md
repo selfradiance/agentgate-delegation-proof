@@ -83,6 +83,8 @@ npm test
 
 Complete — v0.1.0 shipped. Triple-audited (Claude Code 8-round + Codex cold-eyes + Claude Code cross-verification). 88 tests.
 
+Planned next work: [v0.2 server-mediated scope enforcement](docs/v0.2-server-mediated-scope-enforcement.md).
+
 ## License
 
 MIT
