@@ -9,8 +9,10 @@ import {
   CHECKPOINT_FORWARD_STATE_IN_FORWARD,
   CHECKPOINT_FORWARD_STATE_PENDING,
   CheckpointExecutePreparationError,
+  CheckpointExecuteRequestBuildError,
   CheckpointForwardAttachmentError,
   CheckpointForwardTransitionError,
+  buildCheckpointAgentGateExecuteRequest,
   createDelegation,
   getDelegation,
   claimForAccept,
@@ -1205,6 +1207,7 @@ describe("checkpoint execute input preparation", () => {
       reservationId,
       delegationId: d.id,
       delegateId: "agent-pub-key",
+      delegateBondId: "agent-bond-456",
       actionType: "email-rewrite",
       payload: { input: "rewrite this draft" },
       declaredExposureCents: 50,
@@ -1249,6 +1252,7 @@ describe("checkpoint execute input preparation", () => {
     expect(prepared.reservationId).toBe(reservationId);
     expect(prepared.delegationId).toBe(d.id);
     expect(prepared.delegateId).toBe("agent-pub-key");
+    expect(prepared.delegateBondId).toBe("agent-bond-456");
     expect(prepared.actionType).toBe("email-rewrite");
     expect(prepared.payload).toEqual({
       file: "draft.txt",
@@ -1256,6 +1260,69 @@ describe("checkpoint execute input preparation", () => {
     });
     expect(prepared.declaredExposureCents).toBe(50);
     expect(prepared.effectiveExposureCents).toBe(60);
+  });
+});
+
+describe("checkpoint AgentGate execute request builder", () => {
+  it("returns the expected future AgentGate execute request shape", () => {
+    expect(
+      buildCheckpointAgentGateExecuteRequest({
+        reservationId: "res-123",
+        delegationId: "del-123",
+        delegateId: "delegate-pub-key",
+        delegateBondId: "bond-123",
+        actionType: "email-rewrite",
+        payload: { input: "rewrite this draft" },
+        declaredExposureCents: 50,
+        effectiveExposureCents: 60,
+      })
+    ).toEqual({
+      identityRef: "delegate-pub-key",
+      bondId: "bond-123",
+      actionType: "email-rewrite",
+      payload: { input: "rewrite this draft" },
+      exposure_cents: 50,
+    });
+  });
+
+  it("preserves actionType, payload, and exposure correctly", () => {
+    const request = buildCheckpointAgentGateExecuteRequest({
+      reservationId: "res-123",
+      delegationId: "del-123",
+      delegateId: "delegate-pub-key",
+      delegateBondId: "bond-123",
+      actionType: "file-transform",
+      payload: { file: "draft.txt", transform: "rewrite" },
+      declaredExposureCents: 83,
+      effectiveExposureCents: 100,
+    });
+
+    expect(request.actionType).toBe("file-transform");
+    expect(request.payload).toEqual({
+      file: "draft.txt",
+      transform: "rewrite",
+    });
+    expect(request.exposure_cents).toBe(83);
+  });
+
+  it("rejects incomplete prepared input clearly", () => {
+    expect(() =>
+      buildCheckpointAgentGateExecuteRequest({
+        reservationId: "res-123",
+        delegationId: "del-123",
+        delegateId: "delegate-pub-key",
+        delegateBondId: "",
+        actionType: "email-rewrite",
+        payload: { input: "rewrite this draft" },
+        declaredExposureCents: 50,
+        effectiveExposureCents: 60,
+      })
+    ).toThrowError(
+      expect.objectContaining({
+        name: "CheckpointExecuteRequestBuildError",
+        code: "MISSING_BOND_ID",
+      })
+    );
   });
 });
 

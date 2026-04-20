@@ -289,10 +289,21 @@ export interface CheckpointPreparedExecuteInput {
   reservationId: string;
   delegationId: string;
   delegateId: string;
+  delegateBondId: string;
   actionType: string;
   payload: unknown;
   declaredExposureCents: number;
   effectiveExposureCents: number;
+}
+
+export interface CheckpointAgentGateExecuteRequest {
+  // The future execute path resolves this bound delegate reference to the
+  // AgentGate identityId immediately before the real network call.
+  identityRef: string;
+  bondId: string;
+  actionType: string;
+  payload: unknown;
+  exposure_cents: number;
 }
 
 export class CheckpointReservationError extends Error {
@@ -391,6 +402,7 @@ export class CheckpointExecutePreparationError extends Error {
   code:
     | CheckpointReservationExecuteEligibilityCode
     | "DELEGATION_NOT_FOUND"
+    | "DELEGATE_BOND_NOT_FOUND"
     | "PAYLOAD_NOT_RECORDED"
     | "PREPARE_INPUT_FAILED";
 
@@ -398,12 +410,36 @@ export class CheckpointExecutePreparationError extends Error {
     code:
       | CheckpointReservationExecuteEligibilityCode
       | "DELEGATION_NOT_FOUND"
+      | "DELEGATE_BOND_NOT_FOUND"
       | "PAYLOAD_NOT_RECORDED"
       | "PREPARE_INPUT_FAILED",
     message: string
   ) {
     super(message);
     this.name = "CheckpointExecutePreparationError";
+    this.code = code;
+  }
+}
+
+export class CheckpointExecuteRequestBuildError extends Error {
+  code:
+    | "MISSING_IDENTITY_REF"
+    | "MISSING_BOND_ID"
+    | "INVALID_ACTION_TYPE"
+    | "INVALID_EXPOSURE"
+    | "BUILD_REQUEST_FAILED";
+
+  constructor(
+    code:
+      | "MISSING_IDENTITY_REF"
+      | "MISSING_BOND_ID"
+      | "INVALID_ACTION_TYPE"
+      | "INVALID_EXPOSURE"
+      | "BUILD_REQUEST_FAILED",
+    message: string
+  ) {
+    super(message);
+    this.name = "CheckpointExecuteRequestBuildError";
     this.code = code;
   }
 }
@@ -730,6 +766,13 @@ export function prepareCheckpointExecuteInput(
     );
   }
 
+  if (delegation.delegate_bond_id === null) {
+    throw new CheckpointExecutePreparationError(
+      "DELEGATE_BOND_NOT_FOUND",
+      "Delegation has no recorded delegate bond id"
+    );
+  }
+
   if (action.payload_json === null) {
     throw new CheckpointExecutePreparationError(
       "PAYLOAD_NOT_RECORDED",
@@ -742,6 +785,7 @@ export function prepareCheckpointExecuteInput(
       reservationId: action.id,
       delegationId: action.delegation_id,
       delegateId: delegation.delegate_id,
+      delegateBondId: delegation.delegate_bond_id,
       actionType: action.action_type,
       payload: JSON.parse(action.payload_json),
       declaredExposureCents: action.declared_exposure_cents,
@@ -751,6 +795,56 @@ export function prepareCheckpointExecuteInput(
     throw new CheckpointExecutePreparationError(
       "PREPARE_INPUT_FAILED",
       "Checkpoint reservation payload could not be prepared"
+    );
+  }
+}
+
+export function buildCheckpointAgentGateExecuteRequest(
+  preparedInput: CheckpointPreparedExecuteInput
+): CheckpointAgentGateExecuteRequest {
+  if (preparedInput.delegateId.trim().length === 0) {
+    throw new CheckpointExecuteRequestBuildError(
+      "MISSING_IDENTITY_REF",
+      "Prepared execute input is missing delegate identity reference"
+    );
+  }
+
+  if (preparedInput.delegateBondId.trim().length === 0) {
+    throw new CheckpointExecuteRequestBuildError(
+      "MISSING_BOND_ID",
+      "Prepared execute input is missing delegate bond id"
+    );
+  }
+
+  if (preparedInput.actionType.trim().length === 0) {
+    throw new CheckpointExecuteRequestBuildError(
+      "INVALID_ACTION_TYPE",
+      "Prepared execute input is missing action type"
+    );
+  }
+
+  if (
+    !Number.isInteger(preparedInput.declaredExposureCents) ||
+    preparedInput.declaredExposureCents <= 0
+  ) {
+    throw new CheckpointExecuteRequestBuildError(
+      "INVALID_EXPOSURE",
+      "Prepared execute input has an invalid declared exposure"
+    );
+  }
+
+  try {
+    return {
+      identityRef: preparedInput.delegateId,
+      bondId: preparedInput.delegateBondId,
+      actionType: preparedInput.actionType,
+      payload: preparedInput.payload,
+      exposure_cents: preparedInput.declaredExposureCents,
+    };
+  } catch {
+    throw new CheckpointExecuteRequestBuildError(
+      "BUILD_REQUEST_FAILED",
+      "Prepared execute input could not be converted into an AgentGate execute request"
     );
   }
 }

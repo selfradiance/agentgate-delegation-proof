@@ -32,7 +32,7 @@ AgentGate must be running for this project to work.
 - Bond TTL alignment (human bond = delegation TTL + 1hr margin)
 - Auto-complete on scope exhaustion
 - Crash recovery for orphaned action reservations
-- v0.2 Baby Step 12: checkpoint reservations now persist request payloads and expose one narrow read helper that prepares the exact local execute input for an execute-eligible reservation, without calling AgentGate or mutating state
+- v0.2 Baby Step 13: one narrow pure helper now builds the future AgentGate execute request object from prepared checkpoint execute input, preserving action type, payload, and exposure without making any network call or mutating local state
 
 ## Quick Start
 
@@ -69,7 +69,7 @@ npx tsx src/cli.ts status --delegation-id <id>
 
 ## Tests
 
-154 tests across 8 files. 3 integration tests (opt-in via `RUN_INTEGRATION_TESTS=1`, requires live AgentGate).
+157 tests across 8 files. 3 integration tests (opt-in via `RUN_INTEGRATION_TESTS=1`, requires live AgentGate).
 
 ```bash
 npm test
@@ -82,7 +82,7 @@ npm test
 
 ## Status
 
-v0.1.0 shipped and credible. v0.2 Baby Step 12 adds a read-only prepare helper that returns the exact local execute input for an execute-eligible checkpoint reservation. Still no AgentGate execution or orchestration layer. 154 tests.
+v0.1.0 shipped and credible. v0.2 Baby Step 13 adds a pure request-builder for the future AgentGate execute call, built on the prepared checkpoint execute input. Still no AgentGate execution or orchestration layer. 157 tests.
 
 Planned next work: [v0.2 server-mediated scope enforcement](docs/v0.2-server-mediated-scope-enforcement.md).
 
