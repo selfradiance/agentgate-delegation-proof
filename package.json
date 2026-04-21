@@ -6,6 +6,7 @@
   "scripts": {
     "start": "tsx src/cli.ts",
     "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
