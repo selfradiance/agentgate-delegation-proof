@@ -203,6 +203,19 @@ function getCheckpointReservedEvents(delegationId: string) {
   );
 }
 
+function getCheckpointTransparencyRows(delegationId: string) {
+  const db = getDb();
+  return db
+    .prepare(
+      `SELECT delegation_id, reservation_id, event_type, actor_kind
+       FROM delegation_transparency_log
+       WHERE delegation_id = ?
+         AND event_type IN ('delegated_execute_requested', 'checkpoint_action_reserved')
+       ORDER BY rowid`
+    )
+    .all(delegationId) as Array<Record<string, unknown>>;
+}
+
 function writeResolverIdentityFile(identityId = "resolver-identity-123") {
   fs.writeFileSync(
     TEST_CHECKPOINT_RESOLVER_IDENTITY_FILE,
@@ -383,6 +396,67 @@ describe("checkpoint server — execute endpoint", () => {
         (event) => event.event_type === "checkpoint_forward_attached"
       )
     ).toHaveLength(1);
+  });
+
+  it("appends delegated_execute_requested then checkpoint_action_reserved in that order for a successful execute call", async () => {
+    const delegateKeys = generateTestKeys();
+    const delegation = createAcceptedDelegation(delegateKeys);
+    const { baseUrl } = await startServer();
+
+    const response = await fetch(
+      `${baseUrl}/v1/delegations/${delegation.id}/execute`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(buildSignedRequest(delegation.id, delegateKeys)),
+      }
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+
+    expect(getCheckpointTransparencyRows(delegation.id)).toEqual([
+      {
+        delegation_id: delegation.id,
+        reservation_id: null,
+        event_type: "delegated_execute_requested",
+        actor_kind: "delegate",
+      },
+      {
+        delegation_id: delegation.id,
+        reservation_id: body.reservationId,
+        event_type: "checkpoint_action_reserved",
+        actor_kind: "checkpoint",
+      },
+    ]);
+  });
+
+  it("records the real reservation id on checkpoint_action_reserved", async () => {
+    const delegateKeys = generateTestKeys();
+    const delegation = createAcceptedDelegation(delegateKeys);
+    const { baseUrl } = await startServer();
+
+    const response = await fetch(
+      `${baseUrl}/v1/delegations/${delegation.id}/execute`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(buildSignedRequest(delegation.id, delegateKeys)),
+      }
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    const reservedRow = getCheckpointTransparencyRows(delegation.id).find(
+      (row) => row.event_type === "checkpoint_action_reserved"
+    );
+
+    expect(reservedRow).toEqual({
+      delegation_id: delegation.id,
+      reservation_id: body.reservationId,
+      event_type: "checkpoint_action_reserved",
+      actor_kind: "checkpoint",
+    });
   });
 
   it("creates distinct reservations for two sequential authenticated calls", async () => {
@@ -755,6 +829,121 @@ describe("checkpoint server — execute endpoint", () => {
       code: "DELEGATION_NOT_FOUND",
       message: "Delegation not found",
     });
+  });
+
+  it("does not append execute transparency rows for malformed, unauthorized, rejected, or ineligible execute attempts", async () => {
+    const delegateKeys = generateTestKeys();
+    const wrongSignerKeys = generateTestKeys();
+    const acceptedDelegation = createAcceptedDelegation(delegateKeys);
+    const pendingDelegation = createDelegation({
+      delegatorId: "human-pub-key",
+      delegateId: delegateKeys.publicKey,
+      scope: {
+        allowed_actions: ["email-rewrite"],
+        max_actions: 3,
+        max_exposure_cents: 83,
+        max_total_exposure_cents: 250,
+        description: "Rewrite emails",
+      },
+      delegatorBondId: "human-bond-123",
+      ttlSeconds: 3600,
+    });
+    const { baseUrl } = await startServer();
+
+    const malformedResponse = await fetch(
+      `${baseUrl}/v1/delegations/${acceptedDelegation.id}/execute`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ...VALID_REQUEST_TEMPLATE,
+          auth: {
+            delegateId: delegateKeys.publicKey,
+            timestamp: new Date().toISOString(),
+          },
+        }),
+      }
+    );
+
+    const unauthorizedResponse = await fetch(
+      `${baseUrl}/v1/delegations/${acceptedDelegation.id}/execute`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(
+          buildSignedRequest(acceptedDelegation.id, wrongSignerKeys, {
+            delegateId: delegateKeys.publicKey,
+          })
+        ),
+      }
+    );
+
+    const rejectedResponse = await fetch(
+      `${baseUrl}/v1/delegations/${pendingDelegation.id}/execute`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(buildSignedRequest(pendingDelegation.id, delegateKeys)),
+      }
+    );
+
+    const ineligibleResponse = await fetch(
+      `${baseUrl}/v1/delegations/${acceptedDelegation.id}/execute`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(
+          buildSignedRequest(acceptedDelegation.id, delegateKeys, {
+            actionType: "file-transform",
+          })
+        ),
+      }
+    );
+
+    expect(malformedResponse.status).toBe(400);
+    expect(unauthorizedResponse.status).toBe(403);
+    expect(rejectedResponse.status).toBe(409);
+    expect(ineligibleResponse.status).toBe(409);
+    expect(getCheckpointTransparencyRows(acceptedDelegation.id)).toEqual([]);
+    expect(getCheckpointTransparencyRows(pendingDelegation.id)).toEqual([]);
+    expect(getActions(acceptedDelegation.id)).toHaveLength(0);
+    expect(getActions(pendingDelegation.id)).toHaveLength(0);
+  });
+
+  it("does not append checkpoint_action_reserved when execution fails before reservation creation", async () => {
+    const delegateKeys = generateTestKeys();
+    const delegation = createAcceptedDelegationWithScope(delegateKeys, {
+      allowed_actions: ["email-rewrite"],
+      max_actions: 3,
+      max_exposure_cents: 83,
+      max_total_exposure_cents: 250,
+      description: "Rewrite emails",
+    });
+    const { baseUrl } = await startServer();
+
+    const response = await fetch(
+      `${baseUrl}/v1/delegations/${delegation.id}/execute`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(
+          buildSignedRequest(delegation.id, delegateKeys, {
+            actionType: "file-transform",
+          })
+        ),
+      }
+    );
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: false,
+      code: "ACTION_TYPE_NOT_ALLOWED",
+    });
+    expect(
+      getCheckpointTransparencyRows(delegation.id).filter(
+        (row) => row.event_type === "checkpoint_action_reserved"
+      )
+    ).toEqual([]);
   });
 
   it("rejects a delegation in the wrong state", async () => {

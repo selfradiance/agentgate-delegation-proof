@@ -252,6 +252,7 @@ export interface CheckpointReservationParams {
   actionType: string;
   payload: unknown;
   declaredExposureCents: number;
+  appendExecuteTransparencyRows?: boolean;
 }
 
 export interface CheckpointReservationResult {
@@ -674,6 +675,14 @@ export function reserveCheckpointAction(
     const reservationId = randomUUID();
     const now = new Date().toISOString();
 
+    if (txParams.appendExecuteTransparencyRows) {
+      appendTransparencyLogRow({
+        delegationId: txParams.delegationId,
+        eventType: "delegated_execute_requested",
+        actorKind: "delegate",
+      });
+    }
+
     db.prepare(
       `INSERT INTO delegation_actions
        (id, delegation_id, forward_state, action_type, payload_json, declared_exposure_cents, effective_exposure_cents, created_at)
@@ -697,6 +706,15 @@ export function reserveCheckpointAction(
       declared_exposure_cents: txParams.declaredExposureCents,
       effective_exposure_cents: effective,
     });
+
+    if (txParams.appendExecuteTransparencyRows) {
+      appendTransparencyLogRow({
+        delegationId: txParams.delegationId,
+        reservationId,
+        eventType: "checkpoint_action_reserved",
+        actorKind: "checkpoint",
+      });
+    }
 
     return {
       reservationId,

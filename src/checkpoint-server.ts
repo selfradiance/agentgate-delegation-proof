@@ -442,6 +442,7 @@ export async function handleCheckpointRequest(
       actionType: requestResult.data.actionType,
       payload: requestResult.data.payload,
       declaredExposureCents: requestResult.data.declaredExposureCents,
+      appendExecuteTransparencyRows: true,
     });
 
     try {
