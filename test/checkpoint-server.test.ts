@@ -207,10 +207,15 @@ function getCheckpointTransparencyRows(delegationId: string) {
   const db = getDb();
   return db
     .prepare(
-      `SELECT delegation_id, reservation_id, event_type, actor_kind
+      `SELECT delegation_id, reservation_id, event_type, actor_kind, agentgate_action_id
        FROM delegation_transparency_log
        WHERE delegation_id = ?
-         AND event_type IN ('delegated_execute_requested', 'checkpoint_action_reserved')
+         AND event_type IN (
+           'delegated_execute_requested',
+           'checkpoint_action_reserved',
+           'checkpoint_forward_started',
+           'checkpoint_forward_attached'
+         )
        ORDER BY rowid`
     )
     .all(delegationId) as Array<Record<string, unknown>>;
@@ -398,7 +403,7 @@ describe("checkpoint server — execute endpoint", () => {
     ).toHaveLength(1);
   });
 
-  it("appends delegated_execute_requested then checkpoint_action_reserved in that order for a successful execute call", async () => {
+  it("appends the expected transparency event order through checkpoint_forward_attached for a successful execute call", async () => {
     const delegateKeys = generateTestKeys();
     const delegation = createAcceptedDelegation(delegateKeys);
     const { baseUrl } = await startServer();
@@ -421,12 +426,28 @@ describe("checkpoint server — execute endpoint", () => {
         reservation_id: null,
         event_type: "delegated_execute_requested",
         actor_kind: "delegate",
+        agentgate_action_id: null,
       },
       {
         delegation_id: delegation.id,
         reservation_id: body.reservationId,
         event_type: "checkpoint_action_reserved",
         actor_kind: "checkpoint",
+        agentgate_action_id: null,
+      },
+      {
+        delegation_id: delegation.id,
+        reservation_id: body.reservationId,
+        event_type: "checkpoint_forward_started",
+        actor_kind: "checkpoint",
+        agentgate_action_id: null,
+      },
+      {
+        delegation_id: delegation.id,
+        reservation_id: body.reservationId,
+        event_type: "checkpoint_forward_attached",
+        actor_kind: "checkpoint",
+        agentgate_action_id: "ag-checkpoint-001",
       },
     ]);
   });
@@ -456,6 +477,7 @@ describe("checkpoint server — execute endpoint", () => {
       reservation_id: body.reservationId,
       event_type: "checkpoint_action_reserved",
       actor_kind: "checkpoint",
+      agentgate_action_id: null,
     });
   });
 

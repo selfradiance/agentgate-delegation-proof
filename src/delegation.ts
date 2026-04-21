@@ -1341,6 +1341,12 @@ export function startCheckpointForwardAttempt(
       from_forward_state: CHECKPOINT_FORWARD_STATE_PENDING,
       forward_state: CHECKPOINT_FORWARD_STATE_IN_FORWARD,
     });
+    appendTransparencyLogRow({
+      delegationId: action.delegation_id,
+      reservationId: txReservationId,
+      eventType: "checkpoint_forward_started",
+      actorKind: "checkpoint",
+    });
 
     return db
       .prepare("SELECT * FROM delegation_actions WHERE id = ?")
@@ -1416,6 +1422,13 @@ export function attachCheckpointForwardedAction(
         agentgate_action_id: txAgentgateActionId,
         from_forward_state: CHECKPOINT_FORWARD_STATE_IN_FORWARD,
         forward_state: CHECKPOINT_FORWARD_STATE_FORWARDED,
+      });
+      appendTransparencyLogRow({
+        delegationId: action.delegation_id,
+        reservationId: txReservationId,
+        eventType: "checkpoint_forward_attached",
+        actorKind: "checkpoint",
+        agentgateActionId: txAgentgateActionId,
       });
 
       return db

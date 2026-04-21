@@ -72,6 +72,19 @@ function makeTestDelegation(overrides?: Partial<{
   });
 }
 
+function getCheckpointTransparencyRows(delegationId: string) {
+  const db = getDb();
+  return db
+    .prepare(
+      `SELECT delegation_id, reservation_id, event_type, actor_kind, agentgate_action_id
+       FROM delegation_transparency_log
+       WHERE delegation_id = ?
+         AND event_type IN ('checkpoint_forward_started', 'checkpoint_forward_attached')
+       ORDER BY rowid`
+    )
+    .all(delegationId) as Array<Record<string, unknown>>;
+}
+
 beforeEach(() => {
   process.env.DELEGATION_DB_PATH = ":memory:";
 });
@@ -515,6 +528,84 @@ describe("checkpoint forward transition", () => {
       forward_state: CHECKPOINT_FORWARD_STATE_IN_FORWARD,
     });
   });
+
+  it("appends exactly one checkpoint_forward_started transparency row on success", () => {
+    const d = makeTestDelegation();
+    acceptDelegation(d.id);
+
+    const reservation = reserveCheckpointAction({
+      delegationId: d.id,
+      actorPublicKey: "agent-pub-key",
+      actionType: "email-rewrite",
+      payload: { input: "draft" },
+      declaredExposureCents: 50,
+    });
+
+    startCheckpointForwardAttempt(reservation.reservationId);
+
+    expect(getCheckpointTransparencyRows(d.id)).toEqual([
+      {
+        delegation_id: d.id,
+        reservation_id: reservation.reservationId,
+        event_type: "checkpoint_forward_started",
+        actor_kind: "checkpoint",
+        agentgate_action_id: null,
+      },
+    ]);
+  });
+
+  it("does not append misleading checkpoint_forward_started rows for failed, duplicate, wrong-state, or missing-reservation attempts", () => {
+    const d = makeTestDelegation();
+    acceptDelegation(d.id);
+
+    const reservation = reserveCheckpointAction({
+      delegationId: d.id,
+      actorPublicKey: "agent-pub-key",
+      actionType: "email-rewrite",
+      payload: { input: "draft" },
+      declaredExposureCents: 50,
+    });
+
+    startCheckpointForwardAttempt(reservation.reservationId);
+
+    expect(() => startCheckpointForwardAttempt(reservation.reservationId)).toThrowError(
+      expect.objectContaining({
+        code: "RESERVATION_NOT_FORWARDABLE",
+      })
+    );
+
+    const wrongStateResult = reserveAction({
+      delegationId: d.id,
+      actorPublicKey: "agent-pub-key",
+      actionType: "email-rewrite",
+      declaredExposureCents: 50,
+    });
+    if (!("actionId" in wrongStateResult)) {
+      throw new Error("Expected reservation");
+    }
+
+    expect(() => startCheckpointForwardAttempt(wrongStateResult.actionId)).toThrowError(
+      expect.objectContaining({
+        code: "RESERVATION_NOT_FORWARDABLE",
+      })
+    );
+
+    expect(() => startCheckpointForwardAttempt("missing")).toThrowError(
+      expect.objectContaining({
+        code: "RESERVATION_NOT_FOUND",
+      })
+    );
+
+    expect(getCheckpointTransparencyRows(d.id)).toEqual([
+      {
+        delegation_id: d.id,
+        reservation_id: reservation.reservationId,
+        event_type: "checkpoint_forward_started",
+        actor_kind: "checkpoint",
+        agentgate_action_id: null,
+      },
+    ]);
+  });
 });
 
 describe("checkpoint forward attachment", () => {
@@ -577,6 +668,91 @@ describe("checkpoint forward attachment", () => {
       from_forward_state: CHECKPOINT_FORWARD_STATE_IN_FORWARD,
       forward_state: CHECKPOINT_FORWARD_STATE_FORWARDED,
     });
+  });
+
+  it("appends exactly one checkpoint_forward_attached transparency row on success", () => {
+    const d = makeTestDelegation();
+    acceptDelegation(d.id);
+    const reservationId = createInForwardReservation(d.id);
+
+    attachCheckpointForwardedAction(reservationId, "ag-checkpoint-001");
+
+    expect(getCheckpointTransparencyRows(d.id)).toEqual([
+      {
+        delegation_id: d.id,
+        reservation_id: reservationId,
+        event_type: "checkpoint_forward_started",
+        actor_kind: "checkpoint",
+        agentgate_action_id: null,
+      },
+      {
+        delegation_id: d.id,
+        reservation_id: reservationId,
+        event_type: "checkpoint_forward_attached",
+        actor_kind: "checkpoint",
+        agentgate_action_id: "ag-checkpoint-001",
+      },
+    ]);
+  });
+
+  it("does not append misleading checkpoint_forward_attached rows for failed, duplicate, wrong-state, or missing-reservation attempts", () => {
+    const d = makeTestDelegation();
+    acceptDelegation(d.id);
+    const reservationId = createInForwardReservation(d.id);
+
+    attachCheckpointForwardedAction(reservationId, "ag-checkpoint-001");
+
+    expect(() =>
+      attachCheckpointForwardedAction(reservationId, "ag-checkpoint-002")
+    ).toThrowError(
+      expect.objectContaining({
+        code: "AGENTGATE_ACTION_ALREADY_ATTACHED",
+      })
+    );
+
+    const pendingReservation = reserveCheckpointAction({
+      delegationId: d.id,
+      actorPublicKey: "agent-pub-key",
+      actionType: "email-rewrite",
+      payload: { input: "draft" },
+      declaredExposureCents: 50,
+    });
+
+    expect(() =>
+      attachCheckpointForwardedAction(
+        pendingReservation.reservationId,
+        "ag-checkpoint-003"
+      )
+    ).toThrowError(
+      expect.objectContaining({
+        code: "RESERVATION_NOT_IN_FORWARD",
+      })
+    );
+
+    expect(() =>
+      attachCheckpointForwardedAction("missing", "ag-checkpoint-004")
+    ).toThrowError(
+      expect.objectContaining({
+        code: "RESERVATION_NOT_FOUND",
+      })
+    );
+
+    expect(getCheckpointTransparencyRows(d.id)).toEqual([
+      {
+        delegation_id: d.id,
+        reservation_id: reservationId,
+        event_type: "checkpoint_forward_started",
+        actor_kind: "checkpoint",
+        agentgate_action_id: null,
+      },
+      {
+        delegation_id: d.id,
+        reservation_id: reservationId,
+        event_type: "checkpoint_forward_attached",
+        actor_kind: "checkpoint",
+        agentgate_action_id: "ag-checkpoint-001",
+      },
+    ]);
   });
 
   it("rejects attaching a second AgentGate action id", () => {
