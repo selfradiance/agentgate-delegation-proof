@@ -2,7 +2,7 @@
 
 A proof-of-concept for bounded human-to-agent delegation with economic accountability. A human delegates scoped authority to an agent, both parties post bonds, and actions are settled through AgentGate.
 
-v0.2.0 adds a narrow server-mediated scope-enforcement path for delegated actions. The local delegation system only recognizes, accounts for, and bounds delegated actions that pass through this repo's checkpoint. Direct AgentGate calls outside that checkpoint are outside delegation accounting. AgentGate itself remains semantically unchanged.
+v0.2.0 added the real narrow checkpoint path for delegated actions. The repo now also keeps a local append-only transparency log for delegated-authority lifecycle events and checkpoint transitions, inspectable with `status --log`. The local delegation system only recognizes, accounts for, and logs delegated actions that pass through this repo's checkpoint. Direct AgentGate calls outside that checkpoint are outside delegation accounting and outside this local transparency log. AgentGate itself remains semantically unchanged.
 
 ## Why This Exists
 
@@ -12,6 +12,7 @@ Current agent identity systems answer "who is this agent?" but not "who authoriz
 
 - Delegated actions are only recognized, accounted for, and bounded when they pass through the local checkpoint in this repo.
 - The checkpoint enforces delegation existence, delegate binding, request freshness, allowed action type, per-action exposure, total exposure, and max-actions limits before forwarding anything to AgentGate.
+- The repo keeps an ordered local event trail for delegation lifecycle events and checkpoint transitions, readable through `npx tsx src/cli.ts status --delegation <id> --log`.
 - Direct AgentGate calls outside the checkpoint are outside the delegation system's accounting and are not treated as delegated in-scope actions.
 - AgentGate remains unchanged. The delegation checkpoint is a sidecar layer in this repo, not a change to AgentGate core semantics.
 
@@ -33,6 +34,8 @@ direct AgentGate call
   -> outside delegation accounting in this repo
 ```
 
+The checkpoint-managed path also produces an outsider-legible local event trail for the delegation and its checkpoint transitions.
+
 ## How It Relates to AgentGate
 
 [AgentGate](https://github.com/selfradiance/agentgate) is the enforcement substrate. This project calls AgentGate's REST API for identity registration, bond management, action execution, and resolution. No changes to AgentGate core were needed — this is a client, not an extension.
@@ -53,6 +56,19 @@ AgentGate must be running for this project to work.
 - A disallowed action type is rejected before any AgentGate execute call.
 - An exposure-limit violation is rejected before any AgentGate execute call.
 - A pre-attachment AgentGate execute failure returns a machine-readable failure and lands in the local pre-attachment failure seam.
+- `status --log` shows the ordered local transparency log for delegation lifecycle events plus checkpoint transitions recorded in this repo.
+
+## Local Transparency Log
+
+Delegation Identity Proof now keeps a local append-only transparency log in repo-local SQLite. It records delegation lifecycle events (`delegation_created`, `delegation_accepted`, `delegation_revoked`, `delegation_closed`) plus checkpoint transitions for checkpoint-managed execution (`delegated_execute_requested`, reservation, forward start, attachment, finalization, and pre-attachment failure).
+
+The goal is narrow: make delegated-authority activity transparent and inspectable with a clear local accountability record and outsider-legible event trail. It is local to this repo, only covers events recorded here, and does not include direct AgentGate calls made outside the checkpoint.
+
+You can inspect it with:
+
+```bash
+npx tsx src/cli.ts status --delegation <id> --log
+```
 
 ## What's Implemented
 
@@ -62,6 +78,7 @@ AgentGate must be running for this project to work.
 - Zod-validated delegation scope with capacity math
 - Dual bond mechanics (human commitment deposit + agent action bond)
 - CLI with 7 commands: delegate, accept, act, resolve, revoke, close, status
+- `status --log` appends the local transparency-log section for one delegation
 - Ed25519 signed requests for human, agent, and resolver roles
 - Bond TTL alignment (human bond = delegation TTL + 1hr margin)
 - Auto-complete on scope exhaustion
@@ -70,6 +87,7 @@ AgentGate must be running for this project to work.
 - Checkpoint finalize endpoint: `POST /v1/delegations/:id/actions/:reservationId/finalize`
 - Real AgentGate execute handoff plus explicit AgentGate resolution bridge for checkpoint-managed actions
 - Narrow local seams for reservation, forward start, attachment, pre-attachment failure, and finalization
+- Local append-only transparency log for delegation lifecycle events and checkpoint transitions
 
 ## Quick Start
 
@@ -92,7 +110,10 @@ npx tsx src/cli.ts accept --delegation-id <id>
 npx tsx src/cli.ts act --delegation-id <id> --action "file-transform" --exposure 100
 
 # Check status
-npx tsx src/cli.ts status --delegation-id <id>
+npx tsx src/cli.ts status --delegation <id>
+
+# Check status with transparency log
+npx tsx src/cli.ts status --delegation <id> --log
 ```
 
 ## Non-Goals / Limits
@@ -101,12 +122,13 @@ npx tsx src/cli.ts status --delegation-id <id>
 - AgentGate does not understand delegation scope. It still sees normal execute and resolve calls.
 - No retries, queues, background workers, or broader orchestration.
 - No recursive chain-of-custody.
-- No transparency log, generalized authorization framework, or UI.
+- The transparency log is local and narrow. It is not a general-purpose logging product, and it does not cover direct AgentGate calls outside the checkpoint.
+- No generalized authorization framework or UI.
 - Human bond remains a commitment deposit rather than a slashable delegation stake.
 
 ## Tests
 
-183 tests across 8 files. 3 integration tests (opt-in via `RUN_INTEGRATION_TESTS=1`, requires live AgentGate).
+213 tests passing. 3 integration tests are opt-in via `RUN_INTEGRATION_TESTS=1` and require live AgentGate.
 
 ```bash
 npm test
@@ -119,7 +141,7 @@ npm test
 
 ## Status
 
-v0.1.0 shipped and credible. v0.2.0 now proves a narrow server-mediated delegated execution path with explicit execute and finalize checkpoint entrypoints. 183 tests.
+v0.1.0 shipped and credible. The repo now has the real narrow delegated execution checkpoint path plus a local append-only transparency log inspectable through `status --log`. 213 tests passing.
 
 Design note: [v0.2 server-mediated scope enforcement](docs/v0.2-server-mediated-scope-enforcement.md).
 
