@@ -107,6 +107,9 @@ describe("db — schema", () => {
       "outcome",
       "reason_code",
       "created_at",
+      "prev_hash",
+      "entry_hash",
+      "hash_version",
     ]);
   });
 

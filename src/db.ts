@@ -91,12 +91,18 @@ function initSchema(db: Database.Database): void {
       outcome                   TEXT,
       reason_code               TEXT,
       created_at                TEXT NOT NULL,
+      prev_hash                 TEXT,
+      entry_hash                TEXT,
+      hash_version              INTEGER,
       FOREIGN KEY (delegation_id) REFERENCES delegations(id)
     );
   `);
 
   ensureColumn(db, "delegation_actions", "forward_state", "TEXT");
   ensureColumn(db, "delegation_actions", "payload_json", "TEXT");
+  ensureColumn(db, "delegation_transparency_log", "prev_hash", "TEXT");
+  ensureColumn(db, "delegation_transparency_log", "entry_hash", "TEXT");
+  ensureColumn(db, "delegation_transparency_log", "hash_version", "INTEGER");
 }
 
 function ensureColumn(

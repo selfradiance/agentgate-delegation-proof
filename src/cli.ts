@@ -34,7 +34,10 @@ import {
   type DelegationRow,
 } from "./delegation";
 import { DelegationScopeSchema, type DelegationScope } from "./scope";
-import { getTransparencyLogRows } from "./transparency-log";
+import {
+  getTransparencyLogRows,
+  verifyTransparencyLog,
+} from "./transparency-log";
 
 // ---------------------------------------------------------------------------
 // Arg parsing helpers
@@ -409,6 +412,12 @@ function cmdClose(): void {
 function cmdStatus(): void {
   const delegationId = getArg("delegation", true);
   const showLog = hasFlag("log");
+  const verifyLog = hasFlag("verify");
+
+  if (verifyLog && !showLog) {
+    console.error("--verify requires --log.");
+    process.exit(1);
+  }
 
   // Check expiry first
   checkExpiry(delegationId);
@@ -423,6 +432,8 @@ function cmdStatus(): void {
   const actions = getActions(delegationId);
   const events = getEvents(delegationId);
   const transparencyLog = showLog ? getTransparencyLogRows(delegationId) : [];
+  const transparencyVerification =
+    showLog && verifyLog ? verifyTransparencyLog() : null;
 
   console.log("=== Delegation Status ===");
   console.log(`  ID:              ${delegation.id}`);
@@ -464,30 +475,54 @@ function cmdStatus(): void {
     console.log(`\n=== Transparency Log (${transparencyLog.length}) ===`);
     if (transparencyLog.length === 0) {
       console.log("  (no transparency log rows yet)");
-      return;
+    } else {
+      for (const row of transparencyLog) {
+        const parts = [
+          row.created_at,
+          row.event_type,
+          `actor=${row.actor_kind}`,
+        ];
+
+        if (row.reservation_id) {
+          parts.push(`reservation_id=${row.reservation_id}`);
+        }
+        if (row.agentgate_action_id) {
+          parts.push(`agentgate_action_id=${row.agentgate_action_id}`);
+        }
+        if (row.outcome) {
+          parts.push(`outcome=${row.outcome}`);
+        }
+        if (row.reason_code) {
+          parts.push(`reason_code=${row.reason_code}`);
+        }
+
+        console.log(`  ${parts.join(" | ")}`);
+      }
     }
 
-    for (const row of transparencyLog) {
-      const parts = [
-        row.created_at,
-        row.event_type,
-        `actor=${row.actor_kind}`,
-      ];
+    if (transparencyVerification) {
+      console.log("\n=== Transparency Log Verification ===");
+      console.log("  Scope:             whole local transparency log");
+      console.log(`  Status:            ${transparencyVerification.status}`);
+      console.log(
+        `  Chained rows:      ${transparencyVerification.chainedRows}`
+      );
+      console.log(
+        `  Legacy unchained:  ${transparencyVerification.legacyUnchainedRows}`
+      );
 
-      if (row.reservation_id) {
-        parts.push(`reservation_id=${row.reservation_id}`);
+      if (transparencyVerification.status === "broken") {
+        console.log(
+          `  Broken sqlite row: ${transparencyVerification.brokenRowSqliteRowid}`
+        );
+        console.log(
+          `  Broken row id:     ${transparencyVerification.brokenRowId}`
+        );
+        console.log(
+          `  Delegation id:     ${transparencyVerification.brokenDelegationId}`
+        );
+        console.log(`  Reason:            ${transparencyVerification.reason}`);
       }
-      if (row.agentgate_action_id) {
-        parts.push(`agentgate_action_id=${row.agentgate_action_id}`);
-      }
-      if (row.outcome) {
-        parts.push(`outcome=${row.outcome}`);
-      }
-      if (row.reason_code) {
-        parts.push(`reason_code=${row.reason_code}`);
-      }
-
-      console.log(`  ${parts.join(" | ")}`);
     }
   }
 }
@@ -534,7 +569,7 @@ Usage:
   npx tsx src/cli.ts resolve   --action <id> --outcome <success|failed|malicious> [--identity-file <path>]
   npx tsx src/cli.ts revoke    --delegation <id>
   npx tsx src/cli.ts close     --delegation <id>
-  npx tsx src/cli.ts status    --delegation <id> [--log]
+  npx tsx src/cli.ts status    --delegation <id> [--log] [--verify]
 `);
       break;
   }

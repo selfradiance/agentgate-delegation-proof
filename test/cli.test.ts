@@ -5,8 +5,9 @@ import path from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { closeDb, getDb } from "../src/db";
+import { appendTransparencyLogRow } from "../src/transparency-log";
 
-const TSX_PATH = path.join(process.cwd(), "node_modules", ".bin", "tsx");
+const NODE_PATH = process.execPath;
 
 let dbDir = "";
 let dbPath = "";
@@ -73,7 +74,7 @@ function insertTransparencyRow(params: {
 
 function runCli(args: string[]) {
   closeDb();
-  return spawnSync(TSX_PATH, ["src/cli.ts", ...args], {
+  return spawnSync(NODE_PATH, ["--import", "tsx", "src/cli.ts", ...args], {
     cwd: process.cwd(),
     env: {
       ...process.env,
@@ -211,6 +212,74 @@ describe("cli status --log", () => {
     expect(result.stdout).toContain("(no transparency log rows yet)");
   });
 
+  it("shows transparency-log verification results", () => {
+    const delegationId = randomUUID();
+    insertDelegation(delegationId);
+    appendTransparencyLogRow({
+      delegationId,
+      eventType: "delegation_created",
+      actorKind: "delegator",
+    });
+    appendTransparencyLogRow({
+      delegationId,
+      eventType: "delegation_accepted",
+      actorKind: "delegate",
+    });
+
+    const result = runCli([
+      "status",
+      "--delegation",
+      delegationId,
+      "--log",
+      "--verify",
+    ]);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("=== Transparency Log Verification ===");
+    expect(result.stdout).toContain(
+      "Scope:             whole local transparency log"
+    );
+    expect(result.stdout).toContain("Status:            ok");
+    expect(result.stdout).toContain("Chained rows:      2");
+    expect(result.stdout).toContain("Legacy unchained:  0");
+  });
+
+  it("reports the first broken row during verification", () => {
+    const delegationId = randomUUID();
+    insertDelegation(delegationId);
+    const firstRow = appendTransparencyLogRow({
+      delegationId,
+      eventType: "delegation_created",
+      actorKind: "delegator",
+    });
+    appendTransparencyLogRow({
+      delegationId,
+      eventType: "delegation_accepted",
+      actorKind: "delegate",
+    });
+
+    getDb()
+      .prepare(
+        "UPDATE delegation_transparency_log SET reason_code = ? WHERE id = ?"
+      )
+      .run("tampered", firstRow.id);
+
+    const result = runCli([
+      "status",
+      "--delegation",
+      delegationId,
+      "--log",
+      "--verify",
+    ]);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Status:            broken");
+    expect(result.stdout).toContain(`Broken row id:     ${firstRow.id}`);
+    expect(result.stdout).toContain(
+      "Reason:            row entry_hash does not match the recomputed hash for this row"
+    );
+  });
+
   it("preserves missing delegation behavior when --log is present", () => {
     const result = runCli(["status", "--delegation", randomUUID(), "--log"]);
 
@@ -218,12 +287,22 @@ describe("cli status --log", () => {
     expect(result.stderr).toContain("Delegation not found.");
   });
 
+  it("requires --log when --verify is present", () => {
+    const delegationId = randomUUID();
+    insertDelegation(delegationId);
+
+    const result = runCli(["status", "--delegation", delegationId, "--verify"]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("--verify requires --log.");
+  });
+
   it("does not add a new top-level log command", () => {
     const result = runCli(["log"]);
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain(
-      "npx tsx src/cli.ts status    --delegation <id> [--log]"
+      "npx tsx src/cli.ts status    --delegation <id> [--log] [--verify]"
     );
     expect(result.stdout).not.toContain("npx tsx src/cli.ts log");
   });

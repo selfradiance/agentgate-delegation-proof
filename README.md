@@ -2,18 +2,19 @@
 
 A proof-of-concept for bounded human-to-agent delegation with economic accountability. A human delegates scoped authority to an agent, both parties post bonds, and actions are settled through AgentGate.
 
-v0.3.0 keeps the real narrow checkpoint path introduced in v0.2.0 and adds a local append-only transparency log for delegated-authority lifecycle events and checkpoint transitions, inspectable with `status --log`. The local delegation system only recognizes, accounts for, and logs delegated actions that pass through this repo's checkpoint. Direct AgentGate calls outside that checkpoint are outside delegation accounting and outside this local transparency log. AgentGate itself remains semantically unchanged.
+v0.4.0 keeps the real narrow checkpoint path introduced in v0.2.0 and the local transparency log added in v0.3.0, then adds a local tamper-evident hash chain for transparency-log rows. The local delegation system only recognizes, accounts for, and logs delegated actions that pass through this repo's checkpoint. Direct AgentGate calls outside that checkpoint are outside delegation accounting and outside this local transparency log. AgentGate itself remains semantically unchanged.
 
 ## Why This Exists
 
 Current agent identity systems answer "who is this agent?" but not "who authorized it, to do what, within what limits, and with what accountability?" Delegation Identity Proof fills that gap. The human has skin in the game too — not just the agent.
 
-## What v0.3 Proves
+## What v0.4 Proves
 
 - Delegated actions are only recognized, accounted for, and bounded when they pass through the local checkpoint in this repo.
 - The checkpoint enforces delegation existence, delegate binding, request freshness, allowed action type, per-action exposure, total exposure, and max-actions limits before forwarding anything to AgentGate.
 - If a checkpoint reservation survives initial admission but the parent delegation later becomes revoked, settling, or expired before pre-attachment forward/execute preparation, the reservation is failed locally instead of continuing forward.
-- The repo keeps an ordered local event trail for delegation lifecycle events and checkpoint transitions, readable through `npx tsx src/cli.ts status --delegation <id> --log`.
+- The repo keeps an ordered local transparency log for delegation lifecycle events and checkpoint transitions, readable through `npx tsx src/cli.ts status --delegation <id> --log`.
+- The local transparency log now has a local tamper-evident hash chain. It is local only. It can detect in-place edits, row reordering, and middle-row deletions within the existing log file. It does not detect replacement of the entire DB file with a fresh consistent log. It does not cover direct AgentGate calls outside this repo. There is no repair path: verification reports a broken chain, but does not rebuild or fix it.
 - Direct AgentGate calls outside the checkpoint are outside the delegation system's accounting and are not treated as delegated in-scope actions.
 - AgentGate remains unchanged. The delegation checkpoint is a sidecar layer in this repo, not a change to AgentGate core semantics.
 
@@ -59,17 +60,23 @@ AgentGate must be running for this project to work.
 - A pre-attachment AgentGate execute failure returns a machine-readable failure and lands in the local pre-attachment failure seam.
 - A reservation whose parent delegation has since been revoked, entered settling, or expired is failed locally with a machine-readable ineligibility reason before more checkpoint forward work happens.
 - `status --log` shows the ordered local transparency log for delegation lifecycle events plus checkpoint transitions recorded in this repo.
+- `status --log --verify` verifies the local tamper-evident chain for the whole local transparency log, not just the selected delegation's displayed rows, and reports either `ok` or the first broken row.
 
 ## Local Transparency Log
 
-Delegation Identity Proof now keeps a local append-only transparency log in repo-local SQLite. It records delegation lifecycle events (`delegation_created`, `delegation_accepted`, `delegation_revoked`, `delegation_closed`) plus checkpoint transitions for checkpoint-managed execution (`delegated_execute_requested`, reservation, forward start, attachment, finalization, and pre-attachment failure).
+Delegation Identity Proof now keeps a local transparency log in repo-local SQLite. It records delegation lifecycle events (`delegation_created`, `delegation_accepted`, `delegation_revoked`, `delegation_closed`) plus checkpoint transitions for checkpoint-managed execution (`delegated_execute_requested`, reservation, forward start, attachment, finalization, and pre-attachment failure).
 
-The goal is narrow: make delegated-authority activity transparent and inspectable with a clear local accountability record and outsider-legible event trail. It is local to this repo, only covers events recorded here, and does not include direct AgentGate calls made outside the checkpoint.
+The local transparency log now has a local tamper-evident hash chain. It is local only. It can detect in-place edits, row reordering, and middle-row deletions within the existing log file. It does not detect replacement of the entire DB file with a fresh consistent log. It does not cover direct AgentGate calls outside this repo. There is no repair path: verification reports a broken chain, but does not rebuild or fix it.
+
+Legacy rows written before this hardening pass remain readable and are reported as unchained rather than broken.
+
+`status --log --verify` verifies the whole local transparency log. The row listing printed by `status --delegation <id> --log` is still just that delegation's rows.
 
 You can inspect it with:
 
 ```bash
 npx tsx src/cli.ts status --delegation <id> --log
+npx tsx src/cli.ts status --delegation <id> --log --verify
 ```
 
 ## What's Implemented
@@ -81,6 +88,7 @@ npx tsx src/cli.ts status --delegation <id> --log
 - Dual bond mechanics (human commitment deposit + agent action bond)
 - CLI with 7 commands: delegate, accept, act, resolve, revoke, close, status
 - `status --log` appends the local transparency-log section for one delegation
+- `status --log --verify` verifies the whole local transparency-log chain and reports the first broken row when the chain is no longer consistent
 - Ed25519 signed requests for human, agent, and resolver roles
 - Bond TTL alignment (human bond = delegation TTL + 1hr margin)
 - Auto-complete on scope exhaustion
@@ -91,7 +99,8 @@ npx tsx src/cli.ts status --delegation <id> --log
 - Narrow local seams for reservation, forward start, attachment, pre-attachment failure, and finalization
 - Parent-delegation re-checks for pre-attachment checkpoint reservations so revoked / settling / expired parents fail locally instead of continuing forward
 - Checkpoint finalization now reuses the existing delegation auto-complete path when the last settling checkpoint action resolves
-- Local append-only transparency log for delegation lifecycle events and checkpoint transitions
+- Local transparency log for delegation lifecycle events and checkpoint transitions
+- Local tamper-evident hash chain for transparency-log rows with no repair command
 
 ## Quick Start
 
@@ -118,6 +127,9 @@ npx tsx src/cli.ts status --delegation <id>
 
 # Check status with transparency log
 npx tsx src/cli.ts status --delegation <id> --log
+
+# Verify the local transparency-log chain
+npx tsx src/cli.ts status --delegation <id> --log --verify
 ```
 
 ## Non-Goals / Limits
@@ -126,13 +138,15 @@ npx tsx src/cli.ts status --delegation <id> --log
 - AgentGate does not understand delegation scope. It still sees normal execute and resolve calls.
 - No retries, queues, background workers, or broader orchestration.
 - No recursive chain-of-custody.
-- The transparency log is local and narrow. It is not a general-purpose logging product, and it does not cover direct AgentGate calls outside the checkpoint.
+- The transparency log is local and narrow. It does not cover direct AgentGate calls outside the checkpoint.
+- The tamper-evident chain does not detect replacement of the entire DB file with a fresh consistent log.
+- There is no rebuild, repair, or heal command for a broken chain.
 - No generalized authorization framework or UI.
 - Human bond remains a commitment deposit rather than a slashable delegation stake.
 
 ## Tests
 
-216 tests passing. `npm run typecheck` passes. 3 integration tests are opt-in via `RUN_INTEGRATION_TESTS=1` and require live AgentGate.
+`npm test`, `npm run typecheck`, and `npm run build` pass. 3 integration tests are opt-in via `RUN_INTEGRATION_TESTS=1` and require live AgentGate.
 
 ```bash
 npm test
@@ -145,7 +159,7 @@ npm test
 
 ## Status
 
-v0.1.0 shipped and credible. v0.3.0 now keeps the real narrow delegated execution checkpoint path and adds a local append-only transparency log inspectable through `status --log`. The latest narrow checkpoint follow-up makes revocation/settling/expiry propagate into pre-attachment reservations and lets the last finalized checkpoint action complete a settling delegation. 216 tests passing and `npm run typecheck` passes.
+v0.1.0 shipped and credible. v0.4.0 keeps the real narrow delegated execution checkpoint path, keeps the local transparency log inspectable through `status --log`, and adds a local tamper-evident verification pass through `status --log --verify`. The claim stays narrow: local only, detects in-place edits/reordering/deletions in the existing log file, does not detect full DB replacement with a fresh consistent log, and has no repair path.
 
 ## Next Narrow Steps
 
